@@ -65,15 +65,15 @@ def authorize(user: User | None, doc_id: UUID, action: str, db: Session, ip: str
         .first()
     )
 
-    if not user:
-        record_audit(db, action=action, outcome="denied", doc_id=doc_id, ip=ip, detail={"reason": "no_user"})
+    if not user or not user.is_active:
+        record_audit(db, action=action, outcome="denied", doc_id=doc_id, ip=ip, detail={"reason": "inactive_or_missing_user"})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     if not doc:
         record_audit(db, action=action, outcome="denied", actor_id=user.id, doc_id=doc_id, ip=ip, detail={"reason": "not_found"})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    if user.role == "admin" or doc.owner_id == user.id:
+    if doc.owner_id == user.id:
         record_audit(db, action=action, outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
         return doc
 

@@ -4,6 +4,7 @@ from sqlalchemy import (
     String,
     Integer,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -27,6 +28,7 @@ class User(Base):
     pw_hash = Column(String, nullable=False)
     role = Column(role_enum, nullable=False, default="viewer")
     token_version = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
     failed_logins = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

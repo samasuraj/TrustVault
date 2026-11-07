@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
     pw_hash TEXT NOT NULL,
     role user_role NOT NULL DEFAULT 'viewer',
     token_version INT NOT NULL DEFAULT 1,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     failed_logins INT NOT NULL DEFAULT 0,
     locked_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

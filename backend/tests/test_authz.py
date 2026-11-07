@@ -48,7 +48,7 @@ def test_authorize_missing_doc_raises_404():
 def test_authorize_owner_allowed():
     db = MagicMock()
     user_id = uuid.uuid4()
-    user = MagicMock(id=user_id, role="viewer")
+    user = MagicMock(id=user_id, role="viewer", is_active=True)
     doc_id = uuid.uuid4()
     doc = MagicMock(id=doc_id, owner_id=user_id, deleted_at=None)
 
@@ -56,19 +56,44 @@ def test_authorize_owner_allowed():
     res = authorize(user=user, doc_id=doc_id, action="edit", db=db)
     assert res == doc
 
-def test_authorize_admin_allowed():
+def test_authorize_admin_without_grant_raises_404():
     db = MagicMock()
-    user = MagicMock(id=uuid.uuid4(), role="admin")
+    user = MagicMock(id=uuid.uuid4(), role="admin", is_active=True)
     doc_id = uuid.uuid4()
     doc = MagicMock(id=doc_id, owner_id=uuid.uuid4(), deleted_at=None)
 
-    db.query().filter().first.return_value = doc
+    query_mock = db.query.return_value
+    query_mock.filter.return_value.first.side_effect = [doc, None]
+
+    with pytest.raises(HTTPException) as exc:
+        authorize(user=user, doc_id=doc_id, action="read", db=db)
+    assert exc.value.status_code == 404
+
+def test_authorize_admin_with_grant_allowed():
+    db = MagicMock()
+    user = MagicMock(id=uuid.uuid4(), role="admin", is_active=True)
+    doc_id = uuid.uuid4()
+    doc = MagicMock(id=doc_id, owner_id=uuid.uuid4(), deleted_at=None)
+    grant = MagicMock(perm="read")
+
+    query_mock = db.query.return_value
+    query_mock.filter.return_value.first.side_effect = [doc, grant]
+
     res = authorize(user=user, doc_id=doc_id, action="read", db=db)
     assert res == doc
 
+def test_authorize_disabled_user_raises_404():
+    db = MagicMock()
+    user = MagicMock(id=uuid.uuid4(), role="owner", is_active=False)
+    doc_id = uuid.uuid4()
+
+    with pytest.raises(HTTPException) as exc:
+        authorize(user=user, doc_id=doc_id, action="read", db=db)
+    assert exc.value.status_code == 404
+
 def test_authorize_unauthorized_user_raises_404_not_403():
     db = MagicMock()
-    user = MagicMock(id=uuid.uuid4(), role="viewer")
+    user = MagicMock(id=uuid.uuid4(), role="viewer", is_active=True)
     doc_id = uuid.uuid4()
     doc = MagicMock(id=doc_id, owner_id=uuid.uuid4(), deleted_at=None)
 
@@ -83,7 +108,7 @@ def test_authorize_unauthorized_user_raises_404_not_403():
 
 def test_authorize_read_grant_cannot_edit():
     db = MagicMock()
-    user = MagicMock(id=uuid.uuid4(), role="viewer")
+    user = MagicMock(id=uuid.uuid4(), role="viewer", is_active=True)
     doc_id = uuid.uuid4()
     doc = MagicMock(id=doc_id, owner_id=uuid.uuid4(), deleted_at=None)
     grant = MagicMock(perm="read")

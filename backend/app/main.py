@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.config import cfg
 from app.db import get_db
+from app.auth_router import router as auth_router
 
 app = FastAPI(title=cfg.app_name)
 
@@ -14,6 +15,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
