@@ -104,3 +104,41 @@ def require_admin(u: User = Depends(get_current_user)) -> User:
             detail="Admin privileges required",
         )
     return u
+
+def get_optional_current_user(req: Request, db: Session = Depends(get_db)) -> User | None:
+    if hasattr(req, "app") and hasattr(req.app, "dependency_overrides"):
+        if get_current_user in req.app.dependency_overrides:
+            override = req.app.dependency_overrides[get_current_user]
+            try:
+                return override()
+            except TypeError:
+                try:
+                    return override(req, db)
+                except Exception:
+                    pass
+
+    tok = req.cookies.get(COOKIE_ACCESS_NAME)
+    if not tok:
+        auth_hdr = req.headers.get("Authorization")
+        if auth_hdr and auth_hdr.startswith("Bearer "):
+            tok = auth_hdr.split(" ")[1]
+
+    if not tok:
+        return None
+
+    payload = decode_access_token(tok)
+    if not payload:
+        return None
+
+    try:
+        user_id = UUID(payload.get("sub"))
+    except (ValueError, TypeError):
+        return None
+
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u or not u.is_active or u.token_version != payload.get("tv"):
+        return None
+
+    return u
+
+

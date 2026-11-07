@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from fastapi import (
     APIRouter,
@@ -17,9 +17,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import Session
 from app.db import get_db
-from app.models import Document, DocVersion, Grant, User
+from app.models import Document, DocVersion, Grant, User, DownloadToken
 from app.authz import authorize, record_audit, RequireDocAccess
-from app.deps import get_current_user, get_client_ip, verify_csrf
+from app.deps import get_current_user, get_optional_current_user, get_client_ip, verify_csrf
 from app.storage import (
     sanitize_filename,
     verify_file_content,
@@ -51,6 +51,29 @@ class DocumentOut(BaseModel):
     created_at: datetime | None = None
     current_version_id: UUID | None = None
     versions: list[DocVersionOut] = []
+
+class GrantCreate(BaseModel):
+    user_email: str
+    perm: str
+    expires_at: datetime | None = None
+
+class GrantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    doc_id: UUID
+    user_id: UUID
+    user_email: str | None = None
+    perm: str
+    granted_by: UUID
+    granted_at: datetime | None = None
+    revoked_at: datetime | None = None
+    expires_at: datetime | None = None
+
+class DownloadTokenOut(BaseModel):
+    token: str
+    expires_at: str
+    download_url: str
 
 @router.post("", response_model=DocumentOut, status_code=status.HTTP_201_CREATED)
 async def upload_document(
@@ -267,18 +290,246 @@ def delete_document(
     record_audit(db, action="doc_delete", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
     return {"status": "deleted", "id": str(doc.id)}
 
-@router.get("/{doc_id}/download")
-def download_document(
+@router.post("/{doc_id}/grants", response_model=GrantOut, status_code=status.HTTP_201_CREATED)
+def create_grant(
+    doc_id: UUID,
+    payload: GrantCreate,
+    req: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _csrf: None = Depends(verify_csrf),
+):
+    ip = get_client_ip(req)
+    doc = authorize(db, user, doc_id, "share", ip=ip)
+
+    if payload.perm not in ("read", "edit"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Permission must be 'read' or 'edit'")
+
+    target_user = db.query(User).filter(User.email == payload.user_email.strip().lower()).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found")
+
+    now = datetime.now(timezone.utc)
+    active_grants = (
+        db.query(Grant)
+        .filter(
+            Grant.doc_id == doc.id,
+            Grant.user_id == target_user.id,
+            Grant.revoked_at.is_(None),
+        )
+        .all()
+    )
+    for ag in active_grants:
+        ag.revoked_at = now
+
+    grant = Grant(
+        id=uuid.uuid4(),
+        doc_id=doc.id,
+        user_id=target_user.id,
+        perm=payload.perm,
+        granted_by=user.id,
+        granted_at=now,
+        expires_at=payload.expires_at,
+    )
+    db.add(grant)
+    db.commit()
+    db.refresh(grant)
+
+    record_audit(
+        db,
+        action="grant_create",
+        outcome="allowed",
+        actor_id=user.id,
+        doc_id=doc.id,
+        target_user_id=target_user.id,
+        ip=ip,
+        detail={"perm": grant.perm, "expires_at": grant.expires_at.isoformat() if grant.expires_at else None},
+    )
+
+    out = GrantOut.model_validate(grant)
+    out.user_email = target_user.email
+    return out
+
+@router.delete("/{doc_id}/grants/{gid}")
+def revoke_grant(
+    doc_id: UUID,
+    gid: UUID,
+    req: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _csrf: None = Depends(verify_csrf),
+):
+    ip = get_client_ip(req)
+    doc = authorize(db, user, doc_id, "share", ip=ip)
+
+    grant = db.query(Grant).filter(Grant.id == gid, Grant.doc_id == doc.id).first()
+    if not grant:
+        record_audit(
+            db,
+            action="grant_revoke",
+            outcome="denied",
+            actor_id=user.id,
+            doc_id=doc.id,
+            ip=ip,
+            detail={"reason": "grant_not_found", "grant_id": str(gid)},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
+
+    now = datetime.now(timezone.utc)
+    grant.revoked_at = now
+
+    db.query(DownloadToken).filter(
+        DownloadToken.doc_id == doc.id,
+        DownloadToken.user_id == grant.user_id,
+        DownloadToken.used_at.is_(None),
+    ).update({"used_at": now})
+
+    db.commit()
+
+    record_audit(
+        db,
+        action="grant_revoke",
+        outcome="allowed",
+        actor_id=user.id,
+        doc_id=doc.id,
+        target_user_id=grant.user_id,
+        ip=ip,
+        detail={"grant_id": str(grant.id)},
+    )
+    return {"status": "revoked", "id": str(grant.id)}
+
+@router.get("/{doc_id}/grants", response_model=list[GrantOut])
+def list_grants(
     doc_id: UUID,
     req: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     ip = get_client_ip(req)
+    doc = authorize(db, user, doc_id, "share", ip=ip)
+
+    grants = (
+        db.query(Grant, User.email)
+        .join(User, User.id == Grant.user_id)
+        .filter(Grant.doc_id == doc.id)
+        .order_by(Grant.granted_at.desc())
+        .all()
+    )
+
+    record_audit(db, action="grants_list", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
+
+    res = []
+    for g, email in grants:
+        out = GrantOut.model_validate(g)
+        out.user_email = email
+        res.append(out)
+    return res
+
+@router.post("/{doc_id}/download-token", response_model=DownloadTokenOut)
+def issue_download_token(
+    doc_id: UUID,
+    req: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _csrf: None = Depends(verify_csrf),
+):
+    ip = get_client_ip(req)
     doc = authorize(db, user, doc_id, "download", ip=ip)
 
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=60)
+    tok = DownloadToken(
+        id=uuid.uuid4(),
+        doc_id=doc.id,
+        user_id=user.id,
+        expires_at=expires_at,
+        used_at=None,
+    )
+    db.add(tok)
+    db.commit()
+    db.refresh(tok)
+
+    record_audit(
+        db,
+        action="token_issue",
+        outcome="allowed",
+        actor_id=user.id,
+        doc_id=doc.id,
+        ip=ip,
+        detail={"token_id": str(tok.id), "expires_at": expires_at.isoformat()},
+    )
+
+    return DownloadTokenOut(
+        token=str(tok.id),
+        expires_at=expires_at.isoformat(),
+        download_url=f"/documents/{doc.id}/download?token={tok.id}",
+    )
+
+@router.get("/{doc_id}/download")
+def download_document(
+    doc_id: UUID,
+    req: Request,
+    token: UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_current_user),
+):
+    ip = get_client_ip(req)
+    if token is not None:
+        tok = (
+            db.query(DownloadToken)
+            .filter(DownloadToken.id == token, DownloadToken.doc_id == doc_id)
+            .first()
+        )
+        now = datetime.now(timezone.utc)
+        if not tok or tok.used_at is not None or tok.expires_at <= now:
+            record_audit(
+                db,
+                action="token_redeem",
+                outcome="denied",
+                doc_id=doc_id,
+                ip=ip,
+                detail={"reason": "invalid_or_expired_token", "token": str(token)},
+            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+        tok_user = db.query(User).filter(User.id == tok.user_id).first()
+        if not tok_user or not tok_user.is_active:
+            record_audit(
+                db,
+                action="token_redeem",
+                outcome="denied",
+                doc_id=doc_id,
+                ip=ip,
+                detail={"reason": "user_inactive_or_missing", "token": str(token)},
+            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+        doc = authorize(db, tok_user, doc_id, "download", ip=ip)
+
+        tok.used_at = now
+        db.commit()
+
+        record_audit(
+            db,
+            action="token_redeem",
+            outcome="allowed",
+            actor_id=tok_user.id,
+            doc_id=doc.id,
+            ip=ip,
+            detail={"token_id": str(tok.id)},
+        )
+        active_user = tok_user
+    else:
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+        doc = authorize(db, user, doc_id, "download", ip=ip)
+        active_user = user
+
     if not doc.current_version_id:
-        record_audit(db, action="doc_download", outcome="denied", actor_id=user.id, doc_id=doc.id, ip=ip, detail={"reason": "no_versions"})
+        record_audit(db, action="doc_download", outcome="denied", actor_id=active_user.id, doc_id=doc.id, ip=ip, detail={"reason": "no_versions"})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document content not found")
 
     version = db.query(DocVersion).filter(DocVersion.id == doc.current_version_id).first()
@@ -291,7 +542,7 @@ def download_document(
         db,
         action="doc_download",
         outcome="allowed",
-        actor_id=user.id,
+        actor_id=active_user.id,
         doc_id=doc.id,
         ip=ip,
         detail={"version_no": version.version_no, "size": version.size},

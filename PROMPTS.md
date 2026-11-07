@@ -58,10 +58,29 @@
     - `DELETE /documents/{id}`: Soft delete setting `deleted_at = now()`, owner only.
     - `GET /documents/{id}/download`: Enforced via `authorize(..., 'download')`, decrypts from volume, streams with `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`.
   - Added `backend/tests/test_documents.py` covering path traversal neutralization, unicode trick removal, executable and double-extension rejection, magic byte enforcement, AES-256-GCM encryption verification, stranger 404 rejection on all document endpoints, download headers verification, and version access control.
-  - Ran full test suite in container: 156 passed out of 156 tests.
 - **What was wrong**: TODO
 - **What I did instead**: TODO
 
-
-
-
+## 2026-11-07 (Document Sharing & Single-Use Download Tokens)
+- **What I asked**: Implement sharing: POST /documents/{id}/grants (owner only; user email, perm read|edit, optional expiry), DELETE /documents/{id}/grants/{gid} (revoke), GET grants list. Revocation sets revoked_at; since authorize() hits the DB every call, access dies on the next request. Download links: POST /documents/{id}/download-token issues a single-use 60-second token bound to (user, doc); redeeming it re-runs authorize() at redemption time, so a revoked user's earlier tokens fail. Revoking also invalidates all unredeemed tokens for that user+doc. Audit every grant/revoke/expiry with who and when. Tests: grant, download works, revoke, same session and old token immediately fail; expired grant fails; viewer cannot grant; owner A cannot touch owner B's docs.
+- **What you produced**:
+  - Implemented grant management in `backend/app/doc_router.py`:
+    - `POST /documents/{id}/grants`: Owner-only grant creation with recipient user email lookup, permission validation (`read` or `edit`), optional `expires_at`, revocation of any prior active grants for that user+doc, and `grant_create` audit logging.
+    - `DELETE /documents/{id}/grants/{gid}`: Revokes grant by setting `revoked_at = now()`, immediately invalidates all unredeemed download tokens for `(doc_id, user_id)`, and logs `grant_revoke` audit event.
+    - `GET /documents/{id}/grants`: Owner-only endpoint listing all grants with recipient emails, sorted by grant date, and logs `grants_list` audit event.
+  - Implemented single-use 60-second download tokens:
+    - `POST /documents/{id}/download-token`: Issues a short-lived (60s) single-use token bound to `(user, doc)` and records `token_issue` audit event.
+    - Updated `GET /documents/{id}/download` to support `?token=` parameter. At redemption time, validates token existence, single-use (`used_at IS NULL`), and unexpired (`expires_at > now`), looks up the bound user, re-executes `authorize(db, bound_user, doc_id, 'download')` against live DB state, marks token used, and logs `token_redeem` audit event.
+  - Updated `backend/app/authz.py` audit logging to differentiate between expired and revoked grants when logging denied access.
+  - Added `get_optional_current_user` in `backend/app/deps.py` allowing token-based download requests to execute without required cookies.
+  - Added comprehensive test suite in `backend/tests/test_sharing.py` covering:
+    - Grant creation, authorized viewer download, token generation, single-use redemption, second-use rejection (404), revocation immediately terminating session download and pre-issued tokens (404).
+    - Expired grant denial on metadata and download (404).
+    - Viewer grant/revoke rejection (404 deny-by-default anti-enumeration).
+    - Owner isolation (Owner A cannot view grants, grant, issue tokens, or download Owner B's doc).
+    - Input validation (invalid permission 400, missing email 404, non-existent grant revoke 404).
+    - Expired download token rejection (404).
+    - Audit log verification for `grant_create`, `token_issue`, `token_redeem`, `grant_revoke`.
+  - Full test suite verified in Docker container: 163 passed out of 163 tests.
+- **What was wrong**: TODO
+- **What I did instead**: TODO

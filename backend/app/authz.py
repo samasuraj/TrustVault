@@ -139,7 +139,19 @@ def authorize(
     )
 
     if not grant:
-        record_audit(db, action=action, outcome="denied", actor_id=user.id, doc_id=doc.id, ip=ip, detail={"reason": "no_active_grant"})
+        past = (
+            db.query(Grant)
+            .filter(Grant.doc_id == doc.id, Grant.user_id == user.id)
+            .order_by(Grant.granted_at.desc())
+            .first()
+        )
+        reason = "no_active_grant"
+        if past:
+            if past.revoked_at is not None:
+                reason = "grant_revoked"
+            elif past.expires_at is not None and past.expires_at <= now:
+                reason = "grant_expired"
+        record_audit(db, action=action, outcome="denied", actor_id=user.id, doc_id=doc.id, ip=ip, detail={"reason": reason})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Active grant checks
