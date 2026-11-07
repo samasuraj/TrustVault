@@ -32,4 +32,19 @@
 - **What was wrong**: TODO
 - **What I did instead**: TODO
 
+## 2026-11-07 (Authorization Engine & Matrix Tests)
+- **What I asked**: Create app/authz.py with ONE function authorize(db, user, doc_id, action) where action in {read, download, edit, delete, share, view_meta}. Rules: doc owner = all actions. Active grant (not revoked, not expired) with perm read = read/download/view_meta; edit = those plus edit. Only owner may share/delete. Admin gets NO content access by default. Soft-deleted docs are inaccessible except to owner for restore. Return the doc if allowed, else raise NotFound after writing a 'denied' audit event. Implement it as a FastAPI dependency so no route can forget it. Query the DB every call, no caching. Write tests/test_authz_matrix.py: a parametrized matrix of every role x every action x (owner, granted-read, granted-edit, revoked, expired, stranger, admin), plus IDOR tests (swap doc IDs in every endpoint), plus a test that removing the authorize call from download makes a test fail.
+- **What you produced**:
+  - Implemented `authorize(db, user, doc_id, action)` in `backend/app/authz.py` with strict permission checks, query-every-call fresh DB lookups, soft-delete isolation (inaccessible except owner restore), owner-only actions (`share`, `delete`), grant enforcement (`read`: read/download/view_meta; `edit`: read/download/view_meta/edit), zero default access for admins, and anti-enumeration 404 responses with hash-chained audit logging on every outcome.
+  - Implemented `RequireDocAccess` FastAPI dependency in `backend/app/authz.py` for route injection.
+  - Created `backend/tests/test_authz_matrix.py` containing:
+    - 126 parametrized matrix test cases across all roles (admin, owner, viewer) x actions (read, download, edit, delete, share, view_meta) x contexts (owner, granted-read, granted-edit, revoked, expired, stranger, admin).
+    - Soft-deleted document protection and owner-restore tests.
+    - IDOR tests verifying swapped doc IDs across GET, download, PUT, DELETE, and POST share endpoints return 404 without leaking info.
+    - Test verifying that omitting `authorize()` in a download route fails security assertion.
+  - Executed full test suite via pytest inside Docker container: 149 passed out of 149 tests.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+
 
