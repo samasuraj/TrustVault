@@ -54,6 +54,9 @@ class StatefulDB:
     def refresh(self, obj):
         pass
 
+    def execute(self, *args, **kwargs):
+        pass
+
     def query(self, *models):
         model = models[0]
         q = MagicMock()
@@ -202,6 +205,7 @@ class StatefulDB:
 
         elif model == AuditEvent:
             oq = MagicMock()
+            oq.with_for_update.return_value = oq
             oq.first.side_effect = lambda: self.audit_events[-1] if self.audit_events else None
             q.order_by.return_value = oq
 

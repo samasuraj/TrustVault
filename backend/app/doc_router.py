@@ -18,7 +18,8 @@ from sqlalchemy import or_, and_, func
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Document, DocVersion, Grant, User, DownloadToken
-from app.authz import authorize, record_audit, RequireDocAccess
+from app.authz import authorize, RequireDocAccess
+from app.audit import log_event
 from app.deps import get_current_user, get_optional_current_user, get_client_ip, verify_csrf
 from app.storage import (
     sanitize_filename,
@@ -88,7 +89,7 @@ async def upload_document(
 ):
     ip = get_client_ip(req)
     if user.role not in ("owner", "admin"):
-        record_audit(db, action="doc_upload", outcome="denied", actor_id=user.id, ip=ip, detail={"reason": "not_owner_role"})
+        log_event(db, action="doc_upload", outcome="denied", actor_id=user.id, ip=ip, detail={"reason": "not_owner_role"})
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only document owners can upload files")
 
     raw_filename = file.filename or "document.bin"
@@ -133,7 +134,7 @@ async def upload_document(
     db.commit()
     db.refresh(doc)
 
-    record_audit(
+    log_event(
         db,
         action="doc_upload",
         outcome="allowed",
@@ -254,7 +255,7 @@ async def update_document(
     db.commit()
     db.refresh(doc)
 
-    record_audit(
+    log_event(
         db,
         action="doc_edit",
         outcome="allowed",
@@ -287,7 +288,7 @@ def delete_document(
     doc.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
-    record_audit(db, action="doc_delete", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
+    log_event(db, action="doc_delete", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
     return {"status": "deleted", "id": str(doc.id)}
 
 @router.post("/{doc_id}/grants", response_model=GrantOut, status_code=status.HTTP_201_CREATED)
@@ -335,7 +336,7 @@ def create_grant(
     db.commit()
     db.refresh(grant)
 
-    record_audit(
+    log_event(
         db,
         action="grant_create",
         outcome="allowed",
@@ -364,7 +365,7 @@ def revoke_grant(
 
     grant = db.query(Grant).filter(Grant.id == gid, Grant.doc_id == doc.id).first()
     if not grant:
-        record_audit(
+        log_event(
             db,
             action="grant_revoke",
             outcome="denied",
@@ -386,7 +387,7 @@ def revoke_grant(
 
     db.commit()
 
-    record_audit(
+    log_event(
         db,
         action="grant_revoke",
         outcome="allowed",
@@ -416,7 +417,7 @@ def list_grants(
         .all()
     )
 
-    record_audit(db, action="grants_list", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
+    log_event(db, action="grants_list", outcome="allowed", actor_id=user.id, doc_id=doc.id, ip=ip)
 
     res = []
     for g, email in grants:
@@ -449,7 +450,7 @@ def issue_download_token(
     db.commit()
     db.refresh(tok)
 
-    record_audit(
+    log_event(
         db,
         action="token_issue",
         outcome="allowed",
@@ -482,7 +483,7 @@ def download_document(
         )
         now = datetime.now(timezone.utc)
         if not tok or tok.used_at is not None or tok.expires_at <= now:
-            record_audit(
+            log_event(
                 db,
                 action="token_redeem",
                 outcome="denied",
@@ -494,7 +495,7 @@ def download_document(
 
         tok_user = db.query(User).filter(User.id == tok.user_id).first()
         if not tok_user or not tok_user.is_active:
-            record_audit(
+            log_event(
                 db,
                 action="token_redeem",
                 outcome="denied",
@@ -509,7 +510,7 @@ def download_document(
         tok.used_at = now
         db.commit()
 
-        record_audit(
+        log_event(
             db,
             action="token_redeem",
             outcome="allowed",
@@ -529,7 +530,7 @@ def download_document(
         active_user = user
 
     if not doc.current_version_id:
-        record_audit(db, action="doc_download", outcome="denied", actor_id=active_user.id, doc_id=doc.id, ip=ip, detail={"reason": "no_versions"})
+        log_event(db, action="doc_download", outcome="denied", actor_id=active_user.id, doc_id=doc.id, ip=ip, detail={"reason": "no_versions"})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document content not found")
 
     version = db.query(DocVersion).filter(DocVersion.id == doc.current_version_id).first()
@@ -538,7 +539,7 @@ def download_document(
 
     decrypted_bytes = retrieve_and_decrypt(version.storage_key)
 
-    record_audit(
+    log_event(
         db,
         action="doc_download",
         outcome="allowed",

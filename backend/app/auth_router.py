@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import User
-from app.authz import record_audit
+from app.audit import log_event
 from app.security import (
     hash_pw,
     verify_pw,
@@ -78,7 +78,7 @@ def login(
     u = db.query(User).filter(User.email == payload.email.lower().strip()).first()
 
     if u and u.locked_until and u.locked_until > now:
-        record_audit(
+        log_event(
             db,
             action="auth_login",
             outcome="denied",
@@ -97,7 +97,7 @@ def login(
             if u.failed_logins >= 5:
                 u.locked_until = now + timedelta(minutes=15)
             db.commit()
-            record_audit(
+            log_event(
                 db,
                 action="auth_login",
                 outcome="denied",
@@ -106,7 +106,7 @@ def login(
                 detail={"reason": "bad_password", "failed_attempts": u.failed_logins},
             )
         else:
-            record_audit(
+            log_event(
                 db,
                 action="auth_login",
                 outcome="denied",
@@ -119,7 +119,7 @@ def login(
         )
 
     if not u.is_active:
-        record_audit(
+        log_event(
             db,
             action="auth_login",
             outcome="denied",
@@ -158,7 +158,7 @@ def login(
         path="/",
     )
 
-    record_audit(
+    log_event(
         db,
         action="auth_login",
         outcome="allowed",
@@ -181,7 +181,7 @@ def logout(
     ip = get_client_ip(req)
     try:
         u = get_current_user(req, db)
-        record_audit(db, action="auth_logout", outcome="allowed", actor_id=u.id, ip=ip)
+        log_event(db, action="auth_logout", outcome="allowed", actor_id=u.id, ip=ip)
     except Exception:
         pass
 
@@ -230,7 +230,7 @@ def register(
     db.commit()
     db.refresh(new_u)
 
-    record_audit(
+    log_event(
         db,
         action="user_register",
         outcome="allowed",
@@ -259,7 +259,7 @@ def disable_user(
     target.token_version += 1
     db.commit()
 
-    record_audit(
+    log_event(
         db,
         action="user_disable",
         outcome="allowed",
@@ -285,7 +285,7 @@ def bump_token_version(
     target.token_version += 1
     db.commit()
 
-    record_audit(
+    log_event(
         db,
         action="token_revoke_all",
         outcome="allowed",

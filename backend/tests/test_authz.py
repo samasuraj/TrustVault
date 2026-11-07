@@ -2,17 +2,20 @@ import uuid
 from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
-from app.authz import authorize, record_audit, _compute_hash
+from app.authz import authorize, record_audit, _hmac_hash
 
 def test_compute_hash_deterministic():
     p1 = {"a": 1, "b": "test"}
     p2 = {"b": "test", "a": 1}
-    assert _compute_hash("prev123", p1) == _compute_hash("prev123", p2)
-    assert _compute_hash("prev123", p1) != _compute_hash("prev456", p1)
+    assert _hmac_hash("prev123", p1) == _hmac_hash("prev123", p2)
+    assert _hmac_hash("prev123", p1) != _hmac_hash("prev456", p1)
 
 def test_record_audit():
     db = MagicMock()
-    db.query().order_by().first.return_value = None
+    # Satisfy advisory lock execute calls
+    db.execute.return_value = None
+    # For the last-event query (with_for_update)
+    db.query.return_value.order_by.return_value.with_for_update.return_value.first.return_value = None
 
     evt = record_audit(
         db=db,
@@ -27,6 +30,7 @@ def test_record_audit():
     assert evt.outcome == "allowed"
     db.add.assert_called_once()
     db.commit.assert_called_once()
+
 
 def test_authorize_anonymous_raises_404():
     db = MagicMock()

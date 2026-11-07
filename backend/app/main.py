@@ -6,6 +6,7 @@ from app.config import cfg
 from app.db import get_db
 from app.auth_router import router as auth_router
 from app.doc_router import router as doc_router
+from app.admin_router import router as admin_router
 
 app = FastAPI(title=cfg.app_name)
 
@@ -20,6 +21,9 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(doc_router, prefix="/api/documents")
 app.include_router(doc_router, prefix="/documents")
+app.include_router(admin_router, prefix="/api/admin")
+app.include_router(admin_router, prefix="/admin")
+
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):

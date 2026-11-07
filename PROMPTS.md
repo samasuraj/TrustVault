@@ -84,3 +84,30 @@
   - Full test suite verified in Docker container: 163 passed out of 163 tests.
 - **What was wrong**: TODO
 - **What I did instead**: TODO
+
+## 2026-11-07 (Audit Trail Hardening)
+- **What I asked**: Harden the audit trail: Single audit.log_event() function used everywhere; compute hash = HMAC-SHA256(secret, prev_hash || canonical_json(event)) inside a transaction with an advisory lock so the chain is consistent. Postgres trigger raising an exception on UPDATE/DELETE/TRUNCATE of audit_events. The API's DB role has INSERT/SELECT only on that table (create a separate migration role for schema changes). GET /admin/audit/verify walks the chain and reports the first broken link. Audit denied attempts too (actor, doc, action, ip). Admin endpoints: GET /admin/audit (filter by user, doc, action, outcome, date, paginated, CSV export), GET /admin/activity (summary). "Worth noticing" alerts: many denied attempts by one user in 10 minutes, downloads at odd hours, bulk downloads, grant then immediate download by a new user, access to a doc just before the grant was revoked. Show these as flagged items. Tests: direct SQL UPDATE/DELETE fails; tampering a row is detected by verify.
+- **What you produced**:
+  - Implemented `backend/app/audit.py` with:
+    - Single `audit.log_event()` function used across all routes, acquiring PostgreSQL session-level advisory lock (`pg_advisory_lock`) + transaction lock (`with_for_update()`) for consistent concurrent hash chaining.
+    - Deterministic `compute_hash` using HMAC-SHA256 with key from `cfg.audit_hmac_key` over `prev_hash || canonical_json(event)` (RFC 8785 compliant canonical JSON serialization).
+    - `verify_chain(db)` function that walks the audit chain from genesis, checks `prev_hash` linkage and HMAC verification on every row, and pinpoints the first broken link or tampering.
+  - Created Alembic migration `0003_audit_hardening.py`:
+    - Separate triggers blocking UPDATE or DELETE (`FOR EACH ROW`) and TRUNCATE (`FOR EACH STATEMENT`) on `audit_events`.
+    - Created `vault_app` runtime role granted `SELECT, INSERT` only on `audit_events` and standard DML on other tables.
+    - Created `vault_migrate` role with superuser/schema management privileges.
+    - Added database indexes on `audit_events` (`actor_id`, `action`, `outcome`, composite `actor_id, ts`).
+  - Implemented `backend/app/admin_router.py` mounted at `/api/admin` and `/admin`:
+    - `GET /admin/audit/verify`: Admin-only chain verification reporting status, total count, or first broken row details.
+    - `GET /admin/audit`: Filtered (by actor, doc, action, outcome, time range), paginated, and CSV export (`export=csv`).
+    - `GET /admin/activity`: Comprehensive activity dashboard summary (totals, breakdowns by action and outcome, top actors, top docs, and flagged alerts).
+    - `GET /admin/activity/alerts`: Flagged items detecting "Worth noticing" security patterns (many denials in 10m, off-hours downloads 00:00-06:00 UTC, bulk downloads >5 in 1h, grant then immediate download within 60s, access within 120s prior to grant revocation).
+  - Added comprehensive test suite in `backend/tests/test_audit_hardening.py` (17 tests):
+    - Direct SQL tests on live Postgres confirming UPDATE, DELETE, and TRUNCATE raise DB exceptions.
+    - Tamper detection tests confirming verify detects altered hash, altered prev_hash, and mutated event attributes.
+    - Unit tests for HMAC deterministic derivation and advisory locking.
+    - Endpoint tests for verification, pagination, filtering, CSV streaming, admin authz enforcement, and all 5 alert detection rules.
+  - Rebuilt containers and verified full test suite: 184/184 tests passed.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
