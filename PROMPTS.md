@@ -46,5 +46,22 @@
 - **What was wrong**: TODO
 - **What I did instead**: TODO
 
+## 2026-11-07 (Document Endpoints & Encrypted Storage)
+- **What I asked**: Implement document endpoints (POST /documents multipart upload, GET /documents list ONLY docs owned/granted with SQL filter, GET /documents/{id}, PUT /documents/{id} rename/category/new version, DELETE soft delete owner, upload validation max 20MB, allowlist pdf/docx/xlsx/png/jpg/txt/csv, magic bytes match, sanitize filename, reject double extensions and executables, sha256, store random UUID, encrypt AES-256-GCM in volume, download via authorize streaming attachment with nosniff and no-store, versioning with old versions only visible to owner, audit logging, tests for stranger 404, path traversal neutralized, fake extensions rejected).
+- **What you produced**:
+  - Implemented `backend/app/storage.py` providing filename sanitization (stripping paths, null bytes, unicode RTL override tricks), rejection of double extensions and executables, strict magic byte verification for allowed extensions (PDF, DOCX, XLSX, PNG, JPG, TXT, CSV), 20MB size limit check, SHA-256 digest computation, and AES-256-GCM encryption at rest with per-file 12-byte cryptographic nonces stored under random UUIDs in the Docker storage volume.
+  - Implemented `backend/app/doc_router.py` mounted at `/api/documents` and `/documents` covering:
+    - `POST /documents`: Multipart upload, AES-256-GCM encryption, version 1 creation, and `doc_upload` audit logging.
+    - `GET /documents`: Lists only documents the user owns or has an active grant on, filtered purely in SQL with `deleted_at IS NULL`.
+    - `GET /documents/{id}`: Detailed view with version history where old versions are visible only to the owner (granted viewers see only the current version).
+    - `PUT /documents/{id}`: Authorized metadata update and optional file version upload, creating new `DocVersion` with incremented `version_no`.
+    - `DELETE /documents/{id}`: Soft delete setting `deleted_at = now()`, owner only.
+    - `GET /documents/{id}/download`: Enforced via `authorize(..., 'download')`, decrypts from volume, streams with `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`.
+  - Added `backend/tests/test_documents.py` covering path traversal neutralization, unicode trick removal, executable and double-extension rejection, magic byte enforcement, AES-256-GCM encryption verification, stranger 404 rejection on all document endpoints, download headers verification, and version access control.
+  - Ran full test suite in container: 156 passed out of 156 tests.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+
 
 

@@ -1,0 +1,151 @@
+import os
+import re
+import hashlib
+import unicodedata
+from uuid import UUID
+from fastapi import HTTPException, status
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from app.config import cfg
+
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
+ALLOWED_EXTENSIONS = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "txt": "text/plain",
+    "csv": "text/csv",
+}
+
+DANGEROUS_EXTS = {
+    "exe", "bat", "cmd", "sh", "ps1", "vbs", "js", "py", "php",
+    "pl", "dll", "so", "bin", "msi", "com", "scr", "jar", "apk",
+    "pif", "hta", "cpl", "msc", "wsf"
+}
+
+# Unicode directional override and zero-width characters
+UNSAFE_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+def _get_aes_key() -> bytes:
+    return hashlib.sha256(cfg.encryption_key.encode()).digest()
+
+def sanitize_filename(raw_name: str) -> str:
+    if not raw_name or not raw_name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty")
+
+    # Normalize unicode
+    name = unicodedata.normalize("NFKD", raw_name)
+
+    # Strip dangerous characters
+    name = UNSAFE_CHARS.sub("", name)
+
+    # Neutralize path traversal
+    name = name.replace("\\", "/").strip()
+    name = os.path.basename(name)
+
+    # Check for empty after sanitization
+    if not name or name in (".", ".."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
+
+    # Check double extensions and executables
+    parts = [p.lower() for p in name.split(".") if p]
+    if len(parts) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename missing extension")
+
+    ext = parts[-1]
+    if ext == "jpeg":
+        ext = "jpg"
+
+    # Reject if any part contains dangerous extensions
+    for part in parts[:-1]:
+        if part in DANGEROUS_EXTS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Double extension with executable '{part}' is forbidden",
+            )
+
+    if ext in DANGEROUS_EXTS or ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Extension '{ext}' is not allowed",
+        )
+
+    return name
+
+def verify_file_content(data: bytes, ext: str) -> str:
+    if len(data) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File exceeds maximum allowed size of 20MB",
+        )
+    if len(data) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty files are not allowed")
+
+    norm_ext = "jpg" if ext == "jpeg" else ext
+
+    # Magic byte verification
+    if norm_ext == "pdf":
+        if not data.startswith(b"%PDF-"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid PDF magic bytes")
+    elif norm_ext == "png":
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid PNG magic bytes")
+    elif norm_ext == "jpg":
+        if not (data.startswith(b"\xff\xd8\xff")):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JPEG magic bytes")
+    elif norm_ext in ("docx", "xlsx"):
+        if not data.startswith(b"PK\x03\x04"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {norm_ext.upper()} magic bytes")
+    elif norm_ext in ("txt", "csv"):
+        # Must be valid text without null bytes
+        if b"\x00" in data:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {norm_ext.upper()}: binary content detected")
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                data.decode("latin-1")
+            except Exception:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid text encoding in {norm_ext.upper()}")
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file format")
+
+    return ALLOWED_EXTENSIONS.get(norm_ext, "application/octet-stream")
+
+def encrypt_and_store(data: bytes, storage_key: UUID) -> tuple[int, str]:
+    os.makedirs(cfg.storage_dir, exist_ok=True)
+    target_path = os.path.join(cfg.storage_dir, str(storage_key))
+
+    # 12-byte cryptographic nonce per file
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(_get_aes_key())
+    ciphertext = aesgcm.encrypt(nonce, data, None)
+
+    with open(target_path, "wb") as f:
+        f.write(nonce + ciphertext)
+
+    sha = hashlib.sha256(data).hexdigest()
+    return len(data), sha
+
+def retrieve_and_decrypt(storage_key: UUID) -> bytes:
+    target_path = os.path.join(cfg.storage_dir, str(storage_key))
+    if not os.path.exists(target_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage object not found")
+
+    with open(target_path, "rb") as f:
+        raw = f.read()
+
+    if len(raw) < 28:  # 12 bytes nonce + 16 bytes auth tag minimum
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Corrupted storage object")
+
+    nonce = raw[:12]
+    ciphertext = raw[12:]
+
+    aesgcm = AESGCM(_get_aes_key())
+    try:
+        return aesgcm.decrypt(nonce, ciphertext, None)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Decryption failed")

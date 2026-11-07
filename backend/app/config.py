@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     env: str = "development"
     database_url: str = "postgresql+psycopg2://vault:vaultpass@db:5432/trustvault"
     secret_key: str = "change-me-in-production"
+    encryption_key: str = "trustvault-master-aes-gcm-key-32bytes"
     storage_dir: str = "/var/vault/storage"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
