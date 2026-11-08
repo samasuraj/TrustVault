@@ -350,3 +350,28 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+
+---
+
+## 2026-11-08 – Migrate File Storage from Disk (/tmp) to PostgreSQL bytea
+
+**What you asked:** Migrate file storage from ephemeral filesystem (/tmp or STORAGE_DIR) to PostgreSQL `bytea` so encrypted documents persist across serverless executions, add migration 0004, support SEED_* environment variables for production user provisioning, and run the automated test suite.
+
+**What I produced:**
+- Added `file_data` column (`LargeBinary` / `BYTEA`) to `DocVersion` in `backend/app/models.py`.
+- Authored Alembic migration `backend/migrations/versions/0004_add_file_data_bytea.py` adding `file_data` to `doc_versions`.
+- Updated `backend/app/storage.py`:
+  - `encrypt_bytes(data)` and `decrypt_bytes(encrypted_data)` cleanly handle AES-256-GCM encryption/decryption.
+  - `encrypt_and_store_data` returns encrypted ciphertext + nonce for storing in `DocVersion.file_data`.
+  - `retrieve_and_decrypt` prioritizes decrypting in-memory/DB `DocVersion.file_data` before falling back to filesystem.
+  - Made `storage_dir` optional (`None` by default) in `backend/app/config.py`.
+- Updated `backend/app/doc_router.py` to persist encrypted files into `DocVersion.file_data` during document creation and updates, and decrypt directly from DB on download.
+- Updated `backend/app/seed.py` to accept custom production accounts via `SEED_ADMIN_*`, `SEED_OWNER_*`, and `SEED_VIEWER_*` environment variables.
+- Added automated unit test `test_postgres_bytea_storage_and_retrieval` in `backend/tests/test_documents.py` verifying encrypted bytea storage and retrieval with `storage_dir=None`.
+- Verified test suite: 218 passed, 4 skipped across 222 tests.
+- Committed changes (`7d25167`, `82a96af`).
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
