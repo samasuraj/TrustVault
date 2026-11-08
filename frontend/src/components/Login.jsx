@@ -2,12 +2,16 @@ import React, { useState } from 'react';
 import { authApi } from '../api';
 import { Shield, Lock, Mail, AlertCircle, UserCheck } from 'lucide-react';
 
-const SEED_ACCOUNTS = [
-  { role: 'admin', label: 'Admin', email: 'admin@trustvault.local', pw: 'AdminPassword123!' },
-  { role: 'owner', label: 'Alice (Owner)', email: 'alice.owner@trustvault.local', pw: 'AlicePassword123!' },
-  { role: 'owner', label: 'Bob (Owner)', email: 'bob.owner@trustvault.local', pw: 'BobPassword123!' },
-  { role: 'viewer', label: 'Charlie (Viewer)', email: 'charlie.viewer@trustvault.local', pw: 'CharliePassword123!' },
-];
+const isDev = import.meta.env.DEV;
+
+const SEED_ACCOUNTS = isDev
+  ? [
+      { role: 'admin', label: 'Admin', email: 'admin@trustvault.local', pw: 'AdminPassword123!' },
+      { role: 'owner', label: 'Alice (Owner)', email: 'alice.owner@trustvault.local', pw: 'AlicePassword123!' },
+      { role: 'owner', label: 'Bob (Owner)', email: 'bob.owner@trustvault.local', pw: 'BobPassword123!' },
+      { role: 'viewer', label: 'Charlie (Viewer)', email: 'charlie.viewer@trustvault.local', pw: 'CharliePassword123!' },
+    ]
+  : [];
 
 export default function Login({ onLoginSuccess }) {
   const [email, setEmail] = useState('');
@@ -91,24 +95,26 @@ export default function Login({ onLoginSuccess }) {
           </button>
         </form>
 
-        <div className="demo-accounts-section">
-          <div className="demo-title">
-            <UserCheck size={14} /> Quick Demo Accounts
+        {isDev && SEED_ACCOUNTS.length > 0 && (
+          <div className="demo-accounts-section">
+            <div className="demo-title">
+              <UserCheck size={14} /> Quick Demo Accounts
+            </div>
+            <div className="demo-grid">
+              {SEED_ACCOUNTS.map((acc) => (
+                <button
+                  key={acc.email}
+                  type="button"
+                  className="btn-demo"
+                  onClick={() => handleQuickFill(acc)}
+                >
+                  <span className={`badge-pill badge-${acc.role}`}>{acc.role}</span>
+                  <span className="demo-name">{acc.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="demo-grid">
-            {SEED_ACCOUNTS.map((acc) => (
-              <button
-                key={acc.email}
-                type="button"
-                className="btn-demo"
-                onClick={() => handleQuickFill(acc)}
-              >
-                <span className={`badge-pill badge-${acc.role}`}>{acc.role}</span>
-                <span className="demo-name">{acc.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
