@@ -274,6 +274,43 @@ class TestAuditTriggerInDB:
                 cur.execute("TRUNCATE audit_events")
         assert "append-only" in str(exc.value).lower()
 
+    def test_hash_chain_verify_detects_tampered_row(self, raw_conn):
+        """Test that altering a row's hash in PostgreSQL is detected by verify_chain."""
+        from app.db import SessionLocal
+        from app.audit import verify_chain
+
+        event_id = self._insert_event(raw_conn)
+        db = SessionLocal()
+        try:
+            # Confirm chain is intact
+            initial = verify_chain(db)
+            assert initial["ok"] is True
+
+            # Tamper the event by temporarily disabling trigger, modifying hash, re-enabling trigger
+            with raw_conn.cursor() as cur:
+                cur.execute("ALTER TABLE audit_events DISABLE TRIGGER trg_audit_events_no_mutate")
+                cur.execute(
+                    "UPDATE audit_events SET hash = 'deadbeef' || substr(hash, 9) WHERE id = %s",
+                    (event_id,),
+                )
+                cur.execute("ALTER TABLE audit_events ENABLE TRIGGER trg_audit_events_no_mutate")
+                raw_conn.commit()
+
+            # verify_chain must detect the tampered row
+            res = verify_chain(db)
+            assert res["ok"] is False
+            assert res["broken_at_id"] == event_id
+            assert res["reason"] == "hash_mismatch"
+        finally:
+            # Clean up the test event so the audit chain remains intact
+            with raw_conn.cursor() as cur:
+                cur.execute("ALTER TABLE audit_events DISABLE TRIGGER trg_audit_events_no_mutate")
+                cur.execute("DELETE FROM audit_events WHERE id = %s", (event_id,))
+                cur.execute("ALTER TABLE audit_events ENABLE TRIGGER trg_audit_events_no_mutate")
+                raw_conn.commit()
+            db.close()
+
+
 
 # ---------------------------------------------------------------------------
 # Admin endpoint tests (mocked DB)

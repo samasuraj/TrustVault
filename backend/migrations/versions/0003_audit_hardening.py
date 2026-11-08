@@ -49,51 +49,64 @@ CREATE TRIGGER trg_audit_events_no_truncate
 
 # Create vault_app role (for API runtime with restricted audit table permissions)
 # and vault_migrate role (for schema migrations).
-# Wrapped in a DO block so it's idempotent.
-_CREATE_ROLE = """\
+# Wrapped in a DO block so it's idempotent and non-fatal on managed DBs (e.g. Render).
+_CREATE_ROLES = """\
 DO $$ BEGIN
     CREATE ROLE vault_app NOLOGIN;
-EXCEPTION WHEN duplicate_object THEN
-    NULL;
+EXCEPTION
+    WHEN duplicate_object THEN
+        NULL;
+    WHEN insufficient_privilege THEN
+        RAISE NOTICE 'Skipping CREATE ROLE vault_app due to insufficient privilege';
 END $$;
 
 DO $$ BEGIN
-    CREATE ROLE vault_migrate NOLOGIN SUPERUSER;
-EXCEPTION WHEN duplicate_object THEN
-    NULL;
+    CREATE ROLE vault_migrate NOLOGIN;
+EXCEPTION
+    WHEN duplicate_object THEN
+        NULL;
+    WHEN insufficient_privilege THEN
+        RAISE NOTICE 'Skipping CREATE ROLE vault_migrate due to insufficient privilege';
 END $$;
 """
 
-# audit_events: SELECT + INSERT only (append-only table).
-_GRANT_AUDIT = """\
-GRANT SELECT, INSERT ON audit_events TO vault_app;
-"""
-
-# All other tables: full DML + REFERENCES.
-_GRANT_OTHER_TABLES = """\
+# audit_events: SELECT + INSERT only (append-only table) for vault_app, applied only if role exists.
+_GRANT_PRIVILEGES = """\
 DO $$ DECLARE
     r RECORD;
 BEGIN
-    FOR r IN
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = 'public'
-          AND tablename <> 'audit_events'
-    LOOP
-        EXECUTE format(
-            'GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON %I TO vault_app',
-            r.tablename
-        );
-    END LOOP;
-END $$;
-"""
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_app') THEN
+        BEGIN
+            GRANT SELECT, INSERT ON audit_events TO vault_app;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'Skipping GRANT on audit_events to vault_app';
+        END;
 
-# Sequence on audit_events (auto-increment id).
-_GRANT_SEQUENCE = """\
-DO $$ BEGIN
-    GRANT USAGE ON SEQUENCE audit_events_id_seq TO vault_app;
-EXCEPTION WHEN undefined_table THEN
-    NULL;
+        FOR r IN
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename <> 'audit_events'
+        LOOP
+            BEGIN
+                EXECUTE format(
+                    'GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES ON %I TO vault_app',
+                    r.tablename
+                );
+            EXCEPTION WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping GRANT on % to vault_app', r.tablename;
+            END;
+        END LOOP;
+
+        BEGIN
+            GRANT USAGE ON SEQUENCE audit_events_id_seq TO vault_app;
+        EXCEPTION
+            WHEN undefined_table THEN
+                NULL;
+            WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping GRANT USAGE on audit_events_id_seq to vault_app';
+        END;
+    END IF;
 END $$;
 """
 
@@ -105,46 +118,68 @@ DROP TRIGGER IF EXISTS trg_audit_events_no_mutate  ON audit_events;
 DROP TRIGGER IF EXISTS trg_audit_events_no_truncate ON audit_events;
 """
 
-_REVOKE_AUDIT = """\
-REVOKE ALL PRIVILEGES ON audit_events FROM vault_app;
-"""
-
-_REVOKE_OTHER_TABLES = """\
+_REVOKE_PRIVILEGES = """\
 DO $$ DECLARE
     r RECORD;
 BEGIN
-    FOR r IN
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = 'public'
-          AND tablename <> 'audit_events'
-    LOOP
-        EXECUTE format('REVOKE ALL PRIVILEGES ON %I FROM vault_app', r.tablename);
-    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_app') THEN
+        BEGIN
+            REVOKE ALL PRIVILEGES ON audit_events FROM vault_app;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'Skipping REVOKE on audit_events from vault_app';
+        END;
+
+        FOR r IN
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename <> 'audit_events'
+        LOOP
+            BEGIN
+                EXECUTE format('REVOKE ALL PRIVILEGES ON %I FROM vault_app', r.tablename);
+            EXCEPTION WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping REVOKE on % from vault_app', r.tablename;
+            END;
+        END LOOP;
+
+        BEGIN
+            REVOKE ALL PRIVILEGES ON SEQUENCE audit_events_id_seq FROM vault_app;
+        EXCEPTION
+            WHEN undefined_table THEN
+                NULL;
+            WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping REVOKE on audit_events_id_seq from vault_app';
+        END;
+    END IF;
 END $$;
 """
 
-_REVOKE_SEQUENCE = """\
+_DROP_ROLES = """\
 DO $$ BEGIN
-    REVOKE ALL PRIVILEGES ON SEQUENCE audit_events_id_seq FROM vault_app;
-EXCEPTION WHEN undefined_table THEN
-    NULL;
-END $$;
-"""
-
-_DROP_ROLE = """\
-DO $$ BEGIN
-    DROP ROLE vault_app;
-EXCEPTION WHEN undefined_object THEN
-    NULL;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_app') THEN
+        BEGIN
+            DROP ROLE vault_app;
+        EXCEPTION
+            WHEN undefined_object THEN NULL;
+            WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping DROP ROLE vault_app';
+        END;
+    END IF;
 END $$;
 
 DO $$ BEGIN
-    DROP ROLE vault_migrate;
-EXCEPTION WHEN undefined_object THEN
-    NULL;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_migrate') THEN
+        BEGIN
+            DROP ROLE vault_migrate;
+        EXCEPTION
+            WHEN undefined_object THEN NULL;
+            WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping DROP ROLE vault_migrate';
+        END;
+    END IF;
 END $$;
 """
+
 
 
 def upgrade() -> None:
@@ -154,13 +189,11 @@ def upgrade() -> None:
     op.execute(_CREATE_ROW_TRIGGER)
     op.execute(_CREATE_STMT_TRIGGER)
 
-    # 2. Create vault_app role and apply grants.
-    op.execute(_CREATE_ROLE)
-    op.execute(_GRANT_AUDIT)
-    op.execute(_GRANT_OTHER_TABLES)
-    op.execute(_GRANT_SEQUENCE)
+    # 2. Safely create roles and apply grants if permitted.
+    op.execute(_CREATE_ROLES)
+    op.execute(_GRANT_PRIVILEGES)
 
-    # 3. Add indexes on audit_events.
+    # 3. Add indexes on audit_events (independent of roles).
     op.create_index("idx_audit_actor",    "audit_events", ["actor_id"])
     op.create_index("idx_audit_action",   "audit_events", ["action"])
     op.create_index("idx_audit_outcome",  "audit_events", ["outcome"])
@@ -174,12 +207,11 @@ def downgrade() -> None:
     op.drop_index("idx_audit_action",   table_name="audit_events")
     op.drop_index("idx_audit_actor",    table_name="audit_events")
 
-    # 2. Revoke privileges and drop role.
-    op.execute(_REVOKE_SEQUENCE)
-    op.execute(_REVOKE_OTHER_TABLES)
-    op.execute(_REVOKE_AUDIT)
-    op.execute(_DROP_ROLE)
+    # 2. Revoke privileges and drop roles if permitted.
+    op.execute(_REVOKE_PRIVILEGES)
+    op.execute(_DROP_ROLES)
 
     # 3. Drop the two new triggers (function is left in place intentionally;
     #    dropping it would break any other triggers that may reference it).
     op.execute(_DROP_NEW_TRIGGERS)
+

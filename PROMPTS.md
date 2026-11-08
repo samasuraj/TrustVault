@@ -301,3 +301,26 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+---
+
+## 2026-11-08 — Fix Migration 0003 for Managed Postgres (Render Deployment)
+
+**What you asked:** Fix `0003_audit_hardening.py` which failed on Render with "permission denied to create role: CREATE ROLE vault_migrate NOLOGIN SUPERUSER". Remove SUPERUSER, wrap CREATE ROLE in DO blocks catching duplicate_object and insufficient_privilege, run GRANT/REVOKE only if role exists in pg_roles, preserve triggers and indexes, support single Render DB user without role switching, ensure local docker compose passes tests (including UPDATE/DELETE on audit_events raises and hash chain tamper detection), update THREATS.md under knowingly accepted, and record in PROMPTS.md what the AI got wrong.
+
+**What I produced:**
+- Updated `backend/migrations/versions/0003_audit_hardening.py`:
+  - Removed `SUPERUSER` from `vault_migrate`.
+  - Wrapped `CREATE ROLE vault_app` and `CREATE ROLE vault_migrate` in `DO` blocks handling `duplicate_object` and `insufficient_privilege` gracefully with `RAISE NOTICE`.
+  - Wrapped all `GRANT` and `REVOKE` statements in dynamic blocks that execute only if `EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_app')`.
+  - Preserved unconditional row/statement triggers (`BEFORE UPDATE OR DELETE` and `BEFORE TRUNCATE` on `audit_events`) and indexes.
+- Added automated test in `backend/tests/test_audit_hardening.py`:
+  - `test_hash_chain_verify_detects_tampered_row` verifies that tampering with a row in PostgreSQL is detected by `verify_chain(db)`.
+  - Confirmed `test_update_audit_event_raises` and `test_delete_audit_event_raises` pass against the live trigger.
+- Updated `THREATS.md`:
+  - Added entry #6 under "Knowingly Accepted Risks" detailing managed database owner privilege over triggers, mitigated by the HMAC-SHA256 sequential hash chain verified by `/admin/audit/verify` and keeping `AUDIT_HMAC_KEY` outside the database.
+- Verified test suite: 221/221 tests passing in Docker container.
+
+**What was wrong:** The AI assumed superuser rights on a managed database (`CREATE ROLE ... SUPERUSER`), which breaks on managed PostgreSQL providers like Render where the application user is the database owner without superuser privileges.
+
+**What I did instead:** TODO

@@ -166,3 +166,7 @@ The following architectural and operational tradeoffs have been knowingly accept
 
 5. **In-Memory Rate Limiting**:
    - *Reasoning*: The login rate limiter utilizes an in-memory sliding window map (`_login_attempts`). When deploying TrustVault behind multiple horizontal backend replicas, rate limiting will not be globally shared across workers without a centralized cache like Redis. For multi-replica production deployments, rate limiting must be offloaded to an ingress reverse proxy (such as Nginx or Cloudflare).
+
+6. **Managed Database Owner Privilege Over Append-Only Triggers**:
+   - *Reasoning*: On managed PostgreSQL platforms (such as Render or Railway), the application connects as the managed database owner rather than a database superuser. As a result, the database owner possesses sufficient permissions to drop or disable table triggers (`ALTER TABLE audit_events DISABLE TRIGGER ...`). This tradeoff is knowingly accepted and mitigated by the cryptographic HMAC-SHA256 sequential hash chain, which the `/admin/audit/verify` endpoint checks, and by strictly keeping `AUDIT_HMAC_KEY` outside the database in the backend application environment. Even if triggers are dropped and historical rows are modified, any tampering is immediately detected by chain verification.
+
