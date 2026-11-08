@@ -394,3 +394,24 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+
+---
+
+## 2026-11-08 – Production Demo Account Provisioning on Neon & Live Verification
+
+**What you asked:** Seed custom production demo accounts into Neon, configure the SEED_* credentials on Vercel, and verify the live authentication flow.
+
+**What I produced:**
+- Created three production demo accounts with >= 12 character passwords:
+  - Admin: `admin@trustvault.io`
+  - Owner: `alice.owner@trustvault.io`
+  - Viewer: `charlie.viewer@trustvault.io`
+- Executed `app.seed` against the live Neon PostgreSQL database.
+- Added all six `SEED_*` environment variables to the `trust-vault` backend project on Vercel.
+- Tested and verified live login responses (`HTTP 200` with `Set-Cookie: tv_access`, `Set-Cookie: tv_csrf`) for all three roles via the live proxy `https://trustvault-frontend-seven.vercel.app/api/auth/login`.
+- Updated `README.md` with the live Vercel production URLs and demo credentials table.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
