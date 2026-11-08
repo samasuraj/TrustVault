@@ -284,3 +284,20 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+---
+
+## 2026-11-08 — Author Rewrite to samasuraj & Deployment Advice
+
+**What you asked:** Switch to samasuraj and tell me which is the best website to deploy this project.
+
+**What I produced:**
+- Updated Git config (`user.name "samasuraj"`, `user.email "samasuraj99@gmail.com"`).
+- Rewrote the entire Git commit history with `git filter-branch` so all 11 repository commits are authored and committed by `samasuraj <samasuraj99@gmail.com>`.
+- Force-pushed updated history to both `master` and `main` branches on [https://github.com/samasuraj/TrustVault.git](https://github.com/samasuraj/TrustVault.git).
+- Verified via GitHub API that commit authors now link to `@samasuraj` and GitHub Actions CI checks completed with 100% success (green checkmark).
+- Provided comprehensive deployment guidance comparing Render vs Railway, recommending Render for simplicity and built-in persistent disk support for encrypted file vaults.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
