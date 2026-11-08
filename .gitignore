@@ -32,6 +32,7 @@ frontend/dist/
 
 # Environment & IDE
 .env
+.env*
 .vercel/
 .idea/
 .vscode/
