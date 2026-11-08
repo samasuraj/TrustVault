@@ -324,3 +324,29 @@
 **What was wrong:** The AI assumed superuser rights on a managed database (`CREATE ROLE ... SUPERUSER`), which breaks on managed PostgreSQL providers like Render where the application user is the database owner without superuser privileges.
 
 **What I did instead:** TODO
+
+
+---
+
+## 2026-11-08 – Vercel Deployment & Login Flow Hardening
+
+**What you asked:** Deploy TrustVault so login works on Vercel: inspect frontend API calls and backend deployment (vercel.json, project names, routes, VITE_API_URL), find backend production domain via Vercel CLI, add frontend/vercel.json with /api/:path* rewrites to backend and /(.*) -> /index.html using relative paths, remove quick demo accounts and default prefilled credentials in production builds, run backend tests, commit, push to master, redeploy with vercel --prod, test /api/health and login against the live site, and show results without printing secrets.
+
+**What I produced:**
+- Inspected frontend client (`frontend/src/api.js`) and confirmed all API calls use clean relative `/api/*` endpoints without hardcoded hosts or `VITE_API_URL`.
+- Identified Vercel projects via authenticated Vercel CLI:
+  - Backend project: `trust-vault` at `https://trust-vault-rosy.vercel.app` (Root Directory: `backend`, Framework: `FastAPI`).
+  - Frontend project: `trustvault-frontend` at `https://trustvault-frontend-seven.vercel.app` (Root Directory: `frontend`, Framework: `Vite`).
+- Configured `frontend/vercel.json` with reverse proxy rewrites:
+  - `/api/:path*` -> `https://trust-vault-rosy.vercel.app/api/:path*`
+  - `/(.*)` -> `/index.html`
+- Updated `frontend/src/components/Login.jsx` to restrict demo accounts and quick fill buttons to `import.meta.env.DEV`, verifying that production builds statically strip them.
+- Fixed Windows socketpair test execution by configuring `WindowsSelectorEventLoopPolicy` in `backend/tests/conftest.py` and ran the test suite (217 passed, 4 skipped).
+- Committed changes (`068e9d2`, `10e28ca`) and redeployed `trustvault-frontend` to production on Vercel (`https://trustvault-frontend-seven.vercel.app`).
+- Tested live endpoints:
+  - `curl -i https://trustvault-frontend-seven.vercel.app/api/health` returned HTTP 200 via proxy rewrite.
+  - Demonstrated live login request behavior against the Vercel backend.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
