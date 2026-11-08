@@ -375,3 +375,22 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+
+---
+
+## 2026-11-08 – Connect Neon Database to Backend & Apply Migrations
+
+**What you asked:** Connect TrustVault to the Neon database, configure environment variables (SECRET_KEY, ENCRYPTION_KEY, AUDIT_HMAC_KEY), run database migrations on Neon, and ensure health endpoints respond with `db: true`.
+
+**What I produced:**
+- Connected Vercel storage resource `neon-aqua-island` to the `trust-vault` backend project.
+- Configured production environment variables (`ENV=production`, `SECRET_KEY`, `ENCRYPTION_KEY`, `AUDIT_HMAC_KEY`) on the Vercel backend.
+- Updated `backend/app/config.py` with `normalize_database_url` to support `postgresql://` connection strings from Neon with SQLAlchemy and psycopg2.
+- Executed Alembic database migrations up to `0004_add_file_data_bytea` against the Neon PostgreSQL database.
+- Redeployed `trust-vault` to Vercel production.
+- Verified live health check: `curl -i https://trustvault-frontend-seven.vercel.app/api/health` returned `HTTP 200 {"status":"ok","db":true,"app":"TrustVault"}`.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
