@@ -271,3 +271,36 @@ def test_versioning_old_versions_hidden_from_non_owner():
     assert viewer_res.json()["versions"][0]["version_no"] == 2
 
     app.dependency_overrides.clear()
+
+
+def test_postgres_bytea_storage_and_retrieval(monkeypatch):
+    """Verify that file data is stored encrypted in bytea and decrypted without disk storage."""
+    from app.storage import encrypt_and_store_data
+
+    # Ensure storage_dir is None (simulating serverless / no disk)
+    monkeypatch.setattr(cfg, "storage_dir", None)
+
+    secret_content = b"%PDF-1.5 Confidential Financial Record"
+    key = uuid.uuid4()
+
+    size, sha256, encrypted_blob = encrypt_and_store_data(secret_content, key)
+    assert size == len(secret_content)
+    assert secret_content not in encrypted_blob
+
+    # Create DocVersion with encrypted_blob in file_data
+    ver = DocVersion(
+        id=uuid.uuid4(),
+        doc_id=uuid.uuid4(),
+        version_no=1,
+        storage_key=key,
+        file_data=encrypted_blob,
+        size=size,
+        sha256=sha256,
+        mime="application/pdf",
+        uploaded_by=uuid.uuid4(),
+    )
+
+    # retrieve_and_decrypt from version.file_data directly
+    decrypted = retrieve_and_decrypt(key, version=ver)
+    assert decrypted == secret_content
+

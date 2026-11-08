@@ -167,37 +167,86 @@ def verify_file_content(data: bytes, ext: str) -> str:
 
     return ALLOWED_EXTENSIONS.get(norm_ext, "application/octet-stream")
 
-def encrypt_and_store(data: bytes, storage_key: UUID) -> tuple[int, str]:
-    os.makedirs(cfg.storage_dir, exist_ok=True)
-    target_path = os.path.join(cfg.storage_dir, str(storage_key))
-
-    # 12-byte cryptographic nonce per file
+def encrypt_bytes(data: bytes) -> tuple[int, str, bytes]:
     nonce = os.urandom(12)
     aesgcm = AESGCM(_get_aes_key())
     ciphertext = aesgcm.encrypt(nonce, data, None)
-
-    with open(target_path, "wb") as f:
-        f.write(nonce + ciphertext)
-
     sha = hashlib.sha256(data).hexdigest()
-    return len(data), sha
+    return len(data), sha, (nonce + ciphertext)
 
-def retrieve_and_decrypt(storage_key: UUID) -> bytes:
-    target_path = os.path.join(cfg.storage_dir, str(storage_key))
-    if not os.path.exists(target_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage object not found")
-
-    with open(target_path, "rb") as f:
-        raw = f.read()
-
-    if len(raw) < 28:  # 12 bytes nonce + 16 bytes auth tag minimum
+def decrypt_bytes(encrypted_data: bytes) -> bytes:
+    if len(encrypted_data) < 28:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Corrupted storage object")
-
-    nonce = raw[:12]
-    ciphertext = raw[12:]
-
+    nonce = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
     aesgcm = AESGCM(_get_aes_key())
     try:
         return aesgcm.decrypt(nonce, ciphertext, None)
     except Exception:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Decryption failed")
+
+def encrypt_and_store(data: bytes, storage_key: UUID) -> tuple[int, str]:
+    size, sha, payload = encrypt_bytes(data)
+    storage_dir = getattr(cfg, "storage_dir", None)
+    if storage_dir:
+        try:
+            os.makedirs(storage_dir, exist_ok=True)
+            target_path = os.path.join(storage_dir, str(storage_key))
+            with open(target_path, "wb") as f:
+                f.write(payload)
+        except Exception:
+            pass
+    return size, sha
+
+def encrypt_and_store_data(data: bytes, storage_key: UUID) -> tuple[int, str, bytes]:
+    size, sha, payload = encrypt_bytes(data)
+    storage_dir = getattr(cfg, "storage_dir", None)
+    if storage_dir:
+        try:
+            os.makedirs(storage_dir, exist_ok=True)
+            target_path = os.path.join(storage_dir, str(storage_key))
+            with open(target_path, "wb") as f:
+                f.write(payload)
+        except Exception:
+            pass
+    return size, sha, payload
+
+def retrieve_and_decrypt(storage_key: UUID, version=None, db=None) -> bytes:
+    # 1. If in-memory DocVersion object with file_data is provided
+    if version is not None and getattr(version, "file_data", None) is not None:
+        return decrypt_bytes(version.file_data)
+
+    # 2. Query from database if db session is available
+    if db is not None:
+        try:
+            from app.models import DocVersion
+            v = db.query(DocVersion).filter(DocVersion.storage_key == storage_key).first()
+            if v and v.file_data is not None:
+                return decrypt_bytes(v.file_data)
+        except Exception:
+            pass
+    else:
+        # Fallback to query via SessionLocal
+        try:
+            from app.db import SessionLocal
+            from app.models import DocVersion
+            local_db = SessionLocal()
+            try:
+                v = local_db.query(DocVersion).filter(DocVersion.storage_key == storage_key).first()
+                if v and v.file_data is not None:
+                    return decrypt_bytes(v.file_data)
+            finally:
+                local_db.close()
+        except Exception:
+            pass
+
+    # 3. Fallback to filesystem if storage_dir is configured
+    storage_dir = getattr(cfg, "storage_dir", None)
+    if storage_dir:
+        target_path = os.path.join(storage_dir, str(storage_key))
+        if os.path.exists(target_path):
+            with open(target_path, "rb") as f:
+                raw = f.read()
+            return decrypt_bytes(raw)
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Storage object not found")

@@ -27,6 +27,7 @@ from app.storage import (
     sanitize_text,
     verify_file_content,
     encrypt_and_store,
+    encrypt_and_store_data,
     retrieve_and_decrypt,
 )
 from app.sharing_assistant import (
@@ -145,7 +146,7 @@ async def upload_document(
 
     doc_id = uuid.uuid4()
     storage_key = uuid.uuid4()
-    size, sha256 = encrypt_and_store(content, storage_key)
+    size, sha256, encrypted_blob = encrypt_and_store_data(content, storage_key)
 
     now = datetime.now(timezone.utc)
     clean_name = sanitize_text(name) or safe_filename
@@ -169,6 +170,7 @@ async def upload_document(
         doc_id=doc.id,
         version_no=1,
         storage_key=storage_key,
+        file_data=encrypted_blob,
         size=size,
         sha256=sha256,
         mime=mime,
@@ -314,7 +316,7 @@ async def update_document(
         mime = verify_file_content(content, ext)
 
         storage_key = uuid.uuid4()
-        size, sha256 = encrypt_and_store(content, storage_key)
+        size, sha256, encrypted_blob = encrypt_and_store_data(content, storage_key)
 
         max_v = db.query(func.max(DocVersion.version_no)).filter(DocVersion.doc_id == doc.id).scalar() or 0
         new_v_no = max_v + 1
@@ -324,6 +326,7 @@ async def update_document(
             doc_id=doc.id,
             version_no=new_v_no,
             storage_key=storage_key,
+            file_data=encrypted_blob,
             size=size,
             sha256=sha256,
             mime=mime,
@@ -630,7 +633,7 @@ def download_document(
     if not version:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
-    decrypted_bytes = retrieve_and_decrypt(version.storage_key)
+    decrypted_bytes = retrieve_and_decrypt(version.storage_key, version=version, db=db)
 
     log_event(
         db,

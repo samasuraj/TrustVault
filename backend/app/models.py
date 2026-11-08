@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     UniqueConstraint,
+    LargeBinary,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ENUM
@@ -63,6 +64,7 @@ class DocVersion(Base):
     doc_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     version_no = Column(Integer, nullable=False)
     storage_key = Column(UUID(as_uuid=True), default=uuid.uuid4, nullable=False)
+    file_data = Column(LargeBinary, nullable=True)
     size = Column(BigInteger, nullable=False)
     sha256 = Column(String(64), nullable=False)
     mime = Column(String(255), nullable=False)
