@@ -345,3 +345,50 @@ def list_alerts(
     alerts = _detect_alerts(db)
     log_event(db, action="admin_alerts_view", outcome="allowed", actor_id=admin.id, ip=ip, detail={"alert_count": len(alerts)})
     return alerts
+
+
+@router.get("/user-activity")
+def user_activity(
+    req: Request,
+    since: datetime | None = Query(None),
+    action: str | None = Query(None),
+    actor_id: UUID | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Return audit events enriched with actor name/email, newest first."""
+    ip = get_client_ip(req)
+    since = since or (datetime.now(timezone.utc) - timedelta(days=30))
+
+    q = db.query(AuditEvent, User).outerjoin(User, AuditEvent.actor_id == User.id)
+    q = q.filter(AuditEvent.ts >= since)
+    if action:
+        q = q.filter(AuditEvent.action == action)
+    if actor_id:
+        q = q.filter(AuditEvent.actor_id == actor_id)
+
+    total = q.count()
+    rows = q.order_by(AuditEvent.id.desc()).offset(offset).limit(limit).all()
+
+    events = []
+    for ev, user in rows:
+        events.append({
+            "id": ev.id,
+            "ts": ev.ts.isoformat() if ev.ts else None,
+            "actor_id": str(ev.actor_id) if ev.actor_id else None,
+            "actor_name": user.name if user else None,
+            "actor_email": user.email if user else None,
+            "actor_role": user.role if user else None,
+            "action": ev.action,
+            "doc_id": str(ev.doc_id) if ev.doc_id else None,
+            "target_user_id": str(ev.target_user_id) if ev.target_user_id else None,
+            "outcome": ev.outcome,
+            "ip": ev.ip,
+            "detail": ev.detail or {},
+        })
+
+    log_event(db, action="admin_activity_view", outcome="allowed", actor_id=admin.id, ip=ip,
+              detail={"since": since.isoformat(), "action_filter": action})
+    return {"total": total, "events": events, "since": since.isoformat()}

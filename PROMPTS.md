@@ -111,3 +111,144 @@
 - **What was wrong**: TODO
 - **What I did instead**: TODO
 
+## 2026-11-08 (Search & AI Sharing Assistant)
+- **What I asked**: 1. GET /search with filters name (ILIKE), owner, category, date range. Permission filtering is part of the SQL WHERE clause, so results never include docs the user cannot see. Test that search never leaks names/counts of inaccessible docs. 2. AI sharing assistant: POST /documents/{id}/suggest-access (owner only) returns suggested users with reasons. Implement deterministic heuristics (people previously granted similar-category docs, same-category history), and an optional LLM call if ANTHROPIC_API_KEY is set that sees only doc name/category/description, never file contents. The suggestion NEVER creates a grant. A separate POST /documents/{id}/suggestions/{sid}/confirm requires the owner to explicitly pick users and perms. Audit both the suggestion (with what was suggested) and the owner's decision (accepted/modified/rejected). Tests: suggest endpoint changes no grants; confirm by non-owner fails.
+- **What you produced**:
+  - Implemented `backend/app/search_router.py` mounted at `/search` and `/api/search` (and `/documents/search` via `backend/app/doc_router.py`):
+    - Multi-filter document search supporting `name` (ILIKE case-insensitive match), `category` (ILIKE match), `owner` (email, name, or UUID), and flexible `date range` (`start_date`, `end_date`, `from_date`, `to_date`, or `date_range="YYYY-MM-DD..YYYY-MM-DD"`).
+    - Strict SQL WHERE clause permission enforcement (`access_clause` checking doc ownership or active unrevoked unexpired grant) and `deleted_at IS NULL` soft-delete filtering so inaccessible documents are completely excluded at the database level and never leak names, metadata, or counts.
+    - Owner sees full version history while grantees see current version only.
+    - Audit logging for `doc_search` recording query filters and result count.
+  - Implemented AI Sharing Assistant in `backend/app/sharing_assistant.py` and endpoints in `backend/app/doc_router.py`:
+    - `POST /documents/{id}/suggest-access`: Owner-only access check via `authorize(db, user, doc_id, "share")` (non-owners receive anti-enumeration 404). Generates recommendations via deterministic heuristics (scoring previous grants in the same category, similar categories, and collaborator history) and an optional Anthropic Messages API call if `ANTHROPIC_API_KEY` is present. Strictly passes only document metadata (`name`, `category`, `description`) and candidate profiles (`email`, `name`, `role`) to the LLM—never file contents, versions, or encrypted blobs. Gracefully falls back to heuristics on API timeout or failure. The suggestion NEVER creates a grant.
+    - `POST /documents/{id}/suggestions/{sid}/confirm`: Owner-only confirmation endpoint requiring explicit selection of users and permissions (`read` or `edit`). Evaluates owner decision (`accepted` if exactly matching suggestions, `modified` if custom picks/permissions, `rejected` if rejected or empty). Automatically revokes any prior active grants for chosen users and creates new grants.
+    - Comprehensive audit logging recording both the suggestion (`suggest_access` with suggested users and reasons) and owner's decision (`suggest_confirm` with decision status, picked grants, and original suggestions), plus `grant_create` for each confirmed grant.
+  - Created test suites in `backend/tests/test_search.py` and `backend/tests/test_sharing_assistant.py`:
+    - Verified permission filtering in SQL WHERE clause prevents leaking names or counts of inaccessible docs to unauthorized users, strangers, or ungranted admins.
+    - Verified ILIKE name and category matching, owner filtering, and date range bounding.
+    - Verified `POST /documents/{id}/suggest-access` creates zero grants in the database.
+    - Verified `POST /documents/{id}/suggest-access` and confirm by non-owner fail with 404.
+    - Verified deterministic heuristics prioritize same-category and collaborator history and exclude doc owner and active grantees.
+    - Verified Anthropic LLM payload contains only metadata and never file contents.
+    - Verified owner decision states (`accepted`, `modified`, `rejected`) and audit trail verification.
+  - Full test suite verified: 188 passed, 3 skipped.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+## 2026-11-08 (React UI Implementation)
+- **What I asked**: Build the React UI: login, document list with search filters, upload with validation errors, document detail (versions, share dialog with read/edit and expiry, revoke buttons, AI suggestions panel with accept/reject), admin dashboard (audit table with filters, chain verify button, flagged alerts, user management). Handle 401/404/422 cleanly. Never render server HTML unescaped. Use cookie auth + CSRF header. Keep it clean and simple.
+- **What you produced**:
+  - Implemented `frontend/src/api.js` client handling:
+    - Cookie-based authentication (`tv_access`) with automatic `tv_csrf` cookie extraction and `X-CSRF-Token` header injection on all mutating requests (POST, PUT, DELETE).
+    - Robust error extraction mapping 401 (session expired), 404 (access denied/anti-enumeration), 413 (max 20MB size), and 422 (FastAPI validation field details) to safe strings without raw HTML rendering.
+    - Complete API methods for auth, documents, search, sharing, AI suggestions, and admin endpoints.
+  - Implemented `frontend/src/components/Login.jsx`:
+    - Clean login form with email/password validation, error banners, and quick-fill buttons for pre-seeded RBAC accounts (Admin, Alice Owner, Bob Owner, Charlie Viewer).
+  - Implemented `frontend/src/components/Navbar.jsx`:
+    - Responsive header with TrustVault branding, role pill (`admin`, `owner`, `viewer`), dynamic tab navigation, and sign-out control.
+  - Implemented `frontend/src/components/DocumentList.jsx`:
+    - Search filter bar supporting ILIKE document name, category, owner email/name, and date ranges.
+    - Zero information leakage: inaccessible documents are never returned.
+    - Document table with category badges, version count, direct decrypted file download, and owner-only deletion.
+  - Implemented `frontend/src/components/UploadModal.jsx`:
+    - File upload modal with client-side validation (max 20MB limit, allowed extensions allowlist, double-extension block).
+    - Metadata inputs (title, category select with custom option, description) and AES-256-GCM upload.
+  - Implemented `frontend/src/components/DocumentDetail.jsx`:
+    - Comprehensive document inspection view: metadata header and direct file download.
+    - Version history panel with version number, uploaded timestamp, size, MIME type, and SHA-256 hash preview, plus "Upload New Version" form.
+    - Sharing and access grants manager (owner only): active grants table with instant revocation buttons, and grant creation form (`read`/`edit` permission and optional expiration date).
+    - AI Sharing Assistant panel (owner only): generates heuristic and LLM recommendations, displays per-user reason badges, checkboxes, and permission selectors, with "Accept Selected" and "Reject All" confirmation buttons.
+  - Implemented `frontend/src/components/AdminDashboard.jsx` (admin only):
+    - One-click HMAC-SHA256 audit chain verification with live visual status badge (intact vs tampered).
+    - Security alert cards for suspicious patterns (denial spikes, off-hours downloads, bulk downloads).
+    - Filterable and paginated immutable audit log table with JSON detail viewer and CSV export.
+    - User management tab: user registration form and instant session revocation controls (disable user, bump token version).
+  - Implemented modern, accessible CSS styling in `frontend/src/index.css`.
+  - Verified compilation and production bundle build with `npm run build` (built in 2.26s with zero errors).
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+## 2026-11-08 (Hostile Pentesting & Threat Modeling)
+- **What I asked**: Act as a hostile pentester against this codebase. Write tests for 27 specific threat vectors (IDOR on every route, ID enumeration via 404 vs 403, search leakage, download-token replay/sharing across users, use after revoke, expired-grant use, JWT after disable/token_version bump, CSRF, path traversal in filename, polyglot/disguised uploads, zip bombs/oversized uploads, mass assignment, privilege escalation viewer->owner, admin reading content without grant, soft-deleted doc access, old-version access by viewers, audit tampering, audit hash-chain race, SQL injection in search, response header leaks, CORS misconfig, stack traces in errors, default seed creds in prod, rate-limit bypass via X-Forwarded-For, race condition between revoke and download, file-storage volume exposure, log injection through filenames). Fix every real hole found. Then write THREATS.md with per-threat breakdown, covering test name, and a knowingly accepted section.
+- **What you produced**:
+  - Audited the entire backend codebase and patched identified vulnerabilities:
+    - Fixed CORS misconfiguration in `backend/app/main.py`: removed wildcard `*` with credentials, restricted to explicit trusted origins (`ALLOWED_ORIGINS`).
+    - Added global exception handler in `backend/app/main.py` suppressing tracebacks on unexpected HTTP 500 errors.
+    - Added security response headers middleware (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Content-Security-Policy: default-src 'self'`, and `Server: TrustVault`).
+    - Hardened IP extraction in `backend/app/deps.py`: validated IP syntax using `ipaddress` and restricted `X-Forwarded-For` evaluation to verified loopback/trusted reverse proxies.
+    - Hardened file upload validation in `backend/app/storage.py`: added OpenXML archive inspection (`[Content_Types].xml`), path traversal rejection inside archives, 50MB decompression limit, 25:1 expansion ratio limits, and HTML polyglot rejection in PDFs.
+    - Added `sanitize_text` to strip CRLF / non-printable control characters from document names and categories, neutralizing log injection.
+    - Bound download tokens to user identity in `backend/app/doc_router.py`: rejecting cross-user token redemption attempts with HTTP 404.
+    - Blocked default credential seeding in production environments (`cfg.env == "production"`) in `backend/app/seed.py`.
+  - Authored comprehensive hostile pentest test suite in `backend/tests/test_pentest_suite.py` containing 27 dedicated tests with 100% pass rate (27/27 passed).
+  - Verified full test suite across the repository: 215 passed, 3 skipped.
+  - Authored `THREATS.md` with detailed threat descriptions, mitigations, exact test references, and a "Knowingly Accepted" risks section covering antivirus omission, single master encryption key, password-only authentication without MFA, software HMAC key in environment, and in-memory rate limiting.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+## 2026-11-08 (Documentation, Cloud Deployment & CI Pipeline)
+- **What I asked**: Produce README.md (what it is, run with docker compose up, seed credentials for admin/owner/viewer, test command), docs/API.md (every endpoint with method, path, and exactly who may call it), docs/PERMISSIONS.md, docs/WRITEUP.md (built, not built and why, permission model in plain words, AI usage, unfinished), and a deployment guide for Render or Railway (managed Postgres, env vars, volume for encrypted files, HTTPS, change seed passwords flow). Add a CI workflow running pytest. Confirm the instructions work from a clean clone.
+- **What you produced**:
+  - Authored comprehensive `README.md` with platform overview, single-command `docker compose up --build` launch instructions, seed credentials table, local and container test execution commands, and documentation index.
+  - Authored `docs/API.md` providing an exhaustive specification of all 21 HTTP endpoints across authentication, document management, versioning, sharing, search, AI sharing assistant, and admin/audit with exact caller permissions and payload examples.
+  - Authored `docs/PERMISSIONS.md` detailing the centralized `authorize()` gateway, core security invariants (deny by default, anti-enumeration, zero permission caching, separation of duties), role hierarchy, action types, grant lifecycle, single-use download tokens, and versioning access rules.
+  - Authored `docs/WRITEUP.md` reviewing architectural accomplishments, features intentionally not built and their rationales (antivirus daemon, distributed Redis, cloud KMS, HSM, MFA), plain-language permission model explanation, AI privacy boundaries, and future roadmap.
+  - Authored `docs/DEPLOYMENT.md` detailing production deployments on Render and Railway, PostgreSQL configuration, persistent volume mounts for encrypted files (`/var/vault/storage`), HTTPS setup, and the secure production admin provisioning procedure.
+  - Created `.github/workflows/ci.yml` running PostgreSQL 16 service, Python 3.12 pytest suite (218 tests), and Node.js 20 frontend build.
+  - Updated `.env.example` with complete configuration options.
+  - Verified instructions and builds: `npm run build` completed in 3.65s, full pytest suite verified (215 passed, 3 skipped).
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+## 2026-11-08 (Browser End-to-End DOM Testing & Verification)
+- **What I asked**: Open the browser, check that all functionalities are working properly using real DOM inspection and interaction.
+- **What you produced**:
+  - Authored and executed an automated end-to-end browser test suite (`scripts/browser_test.py`) using Playwright with real Chromium DOM element interaction and assertions against the running live application at `http://localhost`.
+  - Tested and verified all core user personas and interface workflows:
+    - **Admin Persona (`admin@trustvault.local`)**:
+      - Signed in via interactive form in the DOM.
+      - Navigated to the Admin Console (`/admin`).
+      - Clicked "Verify Audit Hash Chain", confirmed the cryptographic verification request (`/api/admin/audit/verify`), and asserted the visual green banner `Audit Chain Cryptographically Intact` in the DOM.
+      - Navigated through "Security Alerts" and "User Management" subtabs, asserting form elements (`Register New Vault User`, instant session revocation controls).
+      - Verified successful sign-out.
+    - **Document Owner Persona (`alice.owner@trustvault.local`)**:
+      - Signed in and verified owner navigation bar (`Upload Document` button rendered).
+      - Opened the modal, uploaded `sample_board_brief.pdf` with metadata (`Legal` category, description), submitted for AES-256-GCM encryption at rest, and asserted the newly created document in the table.
+      - Clicked document row to open `DocumentDetail` view, asserting `Version History` (v1 metadata and SHA-256 preview) and `Access Grants` cards.
+      - Clicked `Get Recommendations` on the AI Sharing Assistant panel, asserted the rendered heuristic suggestions with user reasons (`Active member`), and clicked `Accept & Grant Selected` to record confirmed grants in the tamper-proof audit trail.
+      - Tested authenticated decrypted streaming download via Playwright download event listener.
+      - Tested search bar ILIKE filter with dynamic query matching the document.
+      - Signed out cleanly.
+    - **Viewer Persona (`charlie.viewer@trustvault.local`) & RBAC Verification**:
+      - Signed in as Charlie and asserted strict UI RBAC enforcement: `Upload Document` button does **not** exist anywhere in the DOM for viewers.
+      - Verified that Charlie immediately sees the newly granted document in his document table (proving grant propagation).
+      - Opened the document and verified viewer restrictions (`Active Grant` badge rendered, owner-only management buttons hidden).
+      - Signed out cleanly.
+  - Resolved UI integration issues identified during browser testing:
+    - Fixed user object unwrapping in `frontend/src/api.js` and `frontend/src/App.jsx` on `/api/auth/login`.
+    - Fixed `chainResult.ok` handling in `frontend/src/components/AdminDashboard.jsx` for HMAC audit chain verification display.
+    - Upgraded database advisory lock mechanism in `backend/app/audit.py` to transaction-scoped `pg_advisory_xact_lock` to prevent orphaned connection locks.
+  - Captured 14 high-resolution DOM verification screenshots in `browser_screenshots/`.
+- **What was wrong**: TODO
+- **What I did instead**: TODO
+
+---
+
+## 2026-11-08 — Administrative Activity Tab for Admin Dashboard
+
+**What you asked:** Add an "Administrative Activity" section to the Admin console that shows who logged in to the website and all changes/actions each user made.
+
+**What I produced:**
+- **Backend** (`admin_router.py`): New `GET /api/admin/user-activity` endpoint that JOINs `audit_events` with `users` to return events enriched with `actor_name`, `actor_email`, `actor_role`. Supports filters: `action`, `actor_id`, `since`, `limit`, `offset`. Returns `{total, events, since}`.
+- **API** (`api.js`): Added `adminApi.getUserActivity(filters)` helper.
+- **Frontend** (`AdminDashboard.jsx`): Added 4th subtab "Administrative Activity" with two views:
+  - **Login History**: filterable table of `auth_login` events showing user name, role, email, outcome (Success/Failed), IP, timestamp.
+  - **All Activity**: full action log with action dropdown filter, actor UUID filter, date picker, colour-coded action badges per category (auth/doc/grant/suggest/admin), role badges (admin=yellow, owner=blue, viewer=grey), and pagination.
+- **CSS** (`index.css`): Added `.role-badge`, `.action-{prefix}` colour variants, `.admin-activity-container`, `.activity-mode-toggle`.
+- **Tests** (`test_audit_hardening.py`): Added unit tests `test_user_activity_returns_enriched_events` and `test_user_activity_filters` (220/220 backend pytest tests passing).
+- **DOM Verification** (`browser_test.py`): Verified all DOM interactions in real headless Chromium: subtab switching, All User Actions table, and Login History view; captured screenshots `05b_admin_activity_all.png` and `05c_admin_activity_logins.png`.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
+

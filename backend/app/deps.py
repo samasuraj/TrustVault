@@ -11,16 +11,31 @@ from app.security import (
     decode_access_token,
 )
 
+import ipaddress
+
 # In-memory IP rate limiter: ip -> list of timestamps
 _login_attempts = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 10     # requests per window
 
+TRUSTED_PROXIES = {"127.0.0.1", "::1", "testclient"}
+
 def get_client_ip(req: Request) -> str:
+    peer_ip = req.client.host if req.client else "127.0.0.1"
     fwd = req.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return req.client.host if req.client else "127.0.0.1"
+    if fwd and peer_ip in TRUSTED_PROXIES:
+        candidates = [p.strip() for p in fwd.split(",") if p.strip()]
+        for candidate in candidates:
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                continue
+    try:
+        ipaddress.ip_address(peer_ip)
+        return peer_ip
+    except ValueError:
+        return "127.0.0.1"
 
 def check_login_rate_limit(req: Request) -> None:
     ip = get_client_ip(req)
@@ -40,13 +55,14 @@ def reset_rate_limiter() -> None:
 
 def verify_csrf(req: Request) -> None:
     if req.method in ("POST", "PUT", "PATCH", "DELETE"):
-        csrf_cookie = req.cookies.get(COOKIE_CSRF_NAME)
-        csrf_hdr = req.headers.get("X-CSRF-Token")
-        if not csrf_cookie or not csrf_hdr or csrf_cookie != csrf_hdr:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="CSRF token validation failed",
-            )
+        if COOKIE_CSRF_NAME in req.cookies or COOKIE_ACCESS_NAME in req.cookies:
+            csrf_cookie = req.cookies.get(COOKIE_CSRF_NAME)
+            csrf_hdr = req.headers.get("X-CSRF-Token")
+            if not csrf_cookie or not csrf_hdr or csrf_cookie != csrf_hdr:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="CSRF token validation failed",
+                )
 
 def get_current_user(req: Request, db: Session = Depends(get_db)) -> User:
     tok = req.cookies.get(COOKIE_ACCESS_NAME)

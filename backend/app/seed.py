@@ -1,3 +1,4 @@
+from app.config import cfg
 from app.db import SessionLocal
 from app.models import User
 from app.security import hash_pw
@@ -36,6 +37,9 @@ SEEDED_USERS = [
 ]
 
 def seed_users():
+    if cfg.env.lower() == "production":
+        raise RuntimeError("Default seed credentials are prohibited in production environment!")
+
     db = SessionLocal()
     created = []
     try:

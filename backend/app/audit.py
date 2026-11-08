@@ -50,59 +50,53 @@ def log_event(
     if detail is None:
         detail = {}
 
-    has_lock = False
     if hasattr(db, "execute"):
         try:
-            db.execute(text(f"SELECT pg_advisory_lock({_AUDIT_LOCK_KEY})"))
-            has_lock = True
+            db.execute(text(f"SELECT pg_advisory_xact_lock({_AUDIT_LOCK_KEY})"))
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    q = db.query(AuditEvent).order_by(AuditEvent.id.desc())
+    if hasattr(q, "with_for_update"):
+        try:
+            q = q.with_for_update()
         except Exception:
             pass
+    last = q.first()
+    prev = last.hash if last else None
 
-    try:
-        q = db.query(AuditEvent).order_by(AuditEvent.id.desc())
-        if hasattr(q, "with_for_update"):
-            try:
-                q = q.with_for_update()
-            except Exception:
-                pass
-        last = q.first()
-        prev = last.hash if last else None
+    now = datetime.now(timezone.utc)
+    payload = {
+        "ts": format_ts(now),
+        "actor_id": str(actor_id) if actor_id else None,
+        "action": action,
+        "doc_id": str(doc_id) if doc_id else None,
+        "target_user_id": str(target_user_id) if target_user_id else None,
+        "outcome": outcome,
+        "ip": ip,
+        "detail": detail,
+    }
+    h = compute_hash(cfg.audit_hmac_key, prev, payload)
 
-        now = datetime.now(timezone.utc)
-        payload = {
-            "ts": format_ts(now),
-            "actor_id": str(actor_id) if actor_id else None,
-            "action": action,
-            "doc_id": str(doc_id) if doc_id else None,
-            "target_user_id": str(target_user_id) if target_user_id else None,
-            "outcome": outcome,
-            "ip": ip,
-            "detail": detail,
-        }
-        h = compute_hash(cfg.audit_hmac_key, prev, payload)
-
-        evt = AuditEvent(
-            ts=now,
-            actor_id=actor_id,
-            action=action,
-            doc_id=doc_id,
-            target_user_id=target_user_id,
-            outcome=outcome,
-            ip=ip,
-            detail=detail,
-            prev_hash=prev,
-            hash=h,
-        )
-        db.add(evt)
-        db.commit()
-        db.refresh(evt)
-        return evt
-    finally:
-        if has_lock:
-            try:
-                db.execute(text(f"SELECT pg_advisory_unlock({_AUDIT_LOCK_KEY})"))
-            except Exception:
-                pass
+    evt = AuditEvent(
+        ts=now,
+        actor_id=actor_id,
+        action=action,
+        doc_id=doc_id,
+        target_user_id=target_user_id,
+        outcome=outcome,
+        ip=ip,
+        detail=detail,
+        prev_hash=prev,
+        hash=h,
+    )
+    db.add(evt)
+    db.commit()
+    db.refresh(evt)
+    return evt
 
 
 # Backward-compatible alias

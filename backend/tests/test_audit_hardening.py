@@ -215,19 +215,36 @@ class TestAuditTriggerInDB:
             pytest.skip("No live database available")
 
     def _insert_event(self, conn):
-        """Insert one audit event directly via psycopg2, return its id."""
+        """Insert one audit event directly via psycopg2, preserving HMAC chain."""
+        from app.audit import compute_hash, format_ts
         with conn.cursor() as cur:
+            cur.execute("SELECT hash FROM audit_events ORDER BY id DESC LIMIT 1")
+            last_row = cur.fetchone()
+            prev_h = last_row[0] if last_row else None
+            now = datetime.now(timezone.utc)
+            payload = {
+                "ts": format_ts(now),
+                "actor_id": None,
+                "action": "test_action",
+                "doc_id": None,
+                "target_user_id": None,
+                "outcome": "allowed",
+                "ip": "127.0.0.1",
+                "detail": {},
+            }
+            h = compute_hash(cfg.audit_hmac_key, prev_h, payload)
             cur.execute(
                 """
-                INSERT INTO audit_events (action, outcome, ip, detail, prev_hash, hash)
-                VALUES ('test_action', 'allowed', '127.0.0.1', '{}',
-                        NULL, md5(random()::text))
+                INSERT INTO audit_events (ts, action, outcome, ip, detail, prev_hash, hash)
+                VALUES (%s, 'test_action', 'allowed', '127.0.0.1', '{}', %s, %s)
                 RETURNING id
-                """
+                """,
+                (now, prev_h, h),
             )
             row = cur.fetchone()
             conn.commit()
             return row[0]
+
 
     def test_update_audit_event_raises(self, raw_conn):
         event_id = self._insert_event(raw_conn)
@@ -434,6 +451,57 @@ class TestAdminAuditEndpoints:
         assert q.filter.call_count >= 4
         q.offset.assert_called_with(10)
         q.limit.assert_called_with(10)
+
+    def test_user_activity_returns_enriched_events(self):
+        now = datetime.now(timezone.utc)
+        actor = uuid.uuid4()
+        user = User(id=actor, email="user@tv.local", name="Target User", role="owner")
+        event = AuditEvent(
+            id=101, ts=now, actor_id=actor, action="auth_login", doc_id=None,
+            target_user_id=None, outcome="allowed", ip="127.0.0.1",
+            detail={}, prev_hash=None, hash="h" * 64,
+        )
+
+        q = MagicMock()
+        q.outerjoin.return_value = q
+        q.filter.return_value = q
+        q.order_by.return_value = q
+        q.offset.return_value = q
+        q.limit.return_value = q
+        q.count.return_value = 1
+        q.all.return_value = [(event, user)]
+        self.mock_db.query.return_value = q
+
+        res = self.c.get("/api/admin/user-activity")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total"] == 1
+        assert len(data["events"]) == 1
+        ev = data["events"][0]
+        assert ev["id"] == 101
+        assert ev["action"] == "auth_login"
+        assert ev["actor_name"] == "Target User"
+        assert ev["actor_email"] == "user@tv.local"
+        assert ev["actor_role"] == "owner"
+
+    def test_user_activity_filters(self):
+        q = MagicMock()
+        q.outerjoin.return_value = q
+        q.filter.return_value = q
+        q.order_by.return_value = q
+        q.offset.return_value = q
+        q.limit.return_value = q
+        q.count.return_value = 0
+        q.all.return_value = []
+        self.mock_db.query.return_value = q
+
+        actor = uuid.uuid4()
+        res = self.c.get(f"/api/admin/user-activity?action=doc_upload&actor_id={actor}&limit=20&offset=5")
+        assert res.status_code == 200
+        # q.filter called for ts, action, actor_id
+        assert q.filter.call_count >= 2
+        q.offset.assert_called_with(5)
+        q.limit.assert_called_with(20)
 
     def test_alert_detection_logic(self):
         from app.admin_router import _detect_alerts
