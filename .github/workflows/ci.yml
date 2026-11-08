@@ -40,6 +40,21 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pytest httpx
 
+      - name: Run database migrations & seed
+        env:
+          DATABASE_URL: postgresql+psycopg2://vault:vaultpass@localhost:5432/trustvault_test
+          SECRET_KEY: test-secret-key-32-bytes-long-ci-test
+          ENCRYPTION_KEY: test-master-aes-gcm-key-32bytes-ci
+          AUDIT_HMAC_KEY: test-audit-hmac-key-changeme-32b
+          STORAGE_DIR: /tmp/trustvault_storage
+          ENV: test
+          PYTHONPATH: backend
+        run: |
+          mkdir -p /tmp/trustvault_storage
+          cd backend
+          alembic upgrade head
+          python -m app.seed
+
       - name: Run Pytest
         env:
           DATABASE_URL: postgresql+psycopg2://vault:vaultpass@localhost:5432/trustvault_test
@@ -48,8 +63,10 @@ jobs:
           AUDIT_HMAC_KEY: test-audit-hmac-key-changeme-32b
           STORAGE_DIR: /tmp/trustvault_storage
           ENV: test
+          PYTHONPATH: backend
         run: |
           python -m pytest backend/tests -v
+
 
   frontend-build:
     runs-on: ubuntu-latest
