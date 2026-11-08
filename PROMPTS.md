@@ -268,3 +268,19 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+---
+
+## 2026-11-08 — GitHub Actions CI Fix
+
+**What you asked:** What happened (referencing the red "X 1/2" failed CI check badge on GitHub).
+
+**What I produced:**
+- Diagnosed the GitHub Actions failure on the `backend-tests` job: the CI runner did not have `PYTHONPATH: backend` configured to find `app`, and had not executed `alembic upgrade head` on the ephemeral Postgres service container before running tests.
+- Updated `.github/workflows/ci.yml`: added `Run database migrations & seed` step (`alembic upgrade head` and `python -m app.seed`) and exported `PYTHONPATH: backend` for the pytest step.
+- Pushed commit `a8ce2f8` to both `master` and `main` branches.
+- Verified via GitHub Actions API that run `42454530812` completed with **success** (green checkmark).
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO
