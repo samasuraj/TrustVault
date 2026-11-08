@@ -42,3 +42,6 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+.vercel
+.env*

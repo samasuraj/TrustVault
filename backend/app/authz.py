@@ -40,13 +40,22 @@ def authorize(
 
     if not user or not getattr(user, "is_active", True):
         actor_id = getattr(user, "id", None) if user else None
-        log_event(db, action=action, outcome="denied", actor_id=actor_id, doc_id=doc_id, ip=ip, detail={"reason": "unauthenticated_or_disabled"})
+        doc = db.query(Document).filter(Document.id == doc_id).first() if (db and doc_id) else None
+        log_event(
+            db,
+            action=action,
+            outcome="denied",
+            actor_id=actor_id,
+            doc_id=doc.id if doc else None,
+            ip=ip,
+            detail={"reason": "unauthenticated_or_disabled", **({"requested_doc_id": str(doc_id)} if not doc and doc_id else {})},
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     doc = db.query(Document).filter(Document.id == doc_id).first()
 
     if not doc:
-        log_event(db, action=action, outcome="denied", actor_id=user.id, doc_id=doc_id, ip=ip, detail={"reason": "not_found"})
+        log_event(db, action=action, outcome="denied", actor_id=user.id, doc_id=None, ip=ip, detail={"reason": "not_found", "requested_doc_id": str(doc_id)})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     if doc.deleted_at is not None:

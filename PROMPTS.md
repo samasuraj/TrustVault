@@ -415,3 +415,29 @@
 **What was wrong:** TODO
 
 **What I did instead:** TODO
+
+
+---
+
+## 2026-11-08 – Live E2E Flow Testing, Stranger ID 404 Hardening & Mutation Verification
+
+**What you asked:** Redeploy both projects, test live (login with SEED_* credentials, upload file < 4MB as owner, share with viewer, download as viewer, revoke, confirm viewer gets 404, admin verify chain, try stranger document ID and expect 404), execute the mutation check (remove authorize() from download route and confirm tests fail), and finalize documentation.
+
+**What you produced:**
+- Created and executed live E2E test script `scripts/test_live_e2e.py` testing against the live production deployment `https://trustvault-frontend-seven.vercel.app` backed by Neon PostgreSQL:
+  1. Health check: verified `HTTP 200 {"status":"ok","db":true,"app":"TrustVault"}`.
+  2. Owner login: authenticated `alice.owner@trustvault.io` via `POST /api/auth/login`.
+  3. Encrypted document upload: uploaded document as owner via `POST /api/documents`, successfully encrypted with AES-256-GCM and stored in Neon PostgreSQL `bytea`.
+  4. Access sharing: granted `read` permission to `charlie.viewer@trustvault.io` via `POST /api/documents/{doc_id}/grants`.
+  5. Viewer download: authenticated viewer and downloaded decrypted document via `GET /api/documents/{doc_id}/download`; verified content matches uploaded document byte-for-byte.
+  6. Instant revocation: owner revoked grant via `DELETE /api/documents/{doc_id}/grants/{grant_id}`.
+  7. Immediate access termination: viewer attempted download post-revocation, receiving `HTTP 404 {"detail":"Document not found"}` (anti-enumeration satisfied).
+  8. Stranger document access: viewer attempted downloading a non-existent/stranger UUID (`00000000-0000-0000-0000-000000000000`), receiving `HTTP 404 {"detail":"Document not found"}`.
+  9. Audit chain verification: authenticated as `admin@trustvault.io` and invoked `GET /api/admin/audit/verify`, confirming `{"ok": true, "total_events": 62}` across all sequential HMAC-SHA256 hashed actions.
+- Hardened stranger/non-existent document auditing in `backend/app/authz.py` and `backend/app/audit.py` so that attempts to access non-existent UUIDs log `doc_id=None` with `requested_doc_id` in audit detail, strictly respecting PostgreSQL foreign key constraints on `audit_events.doc_id` while returning HTTP 404.
+- Conducted mutation testing on `backend/app/doc_router.py`: temporarily bypassed `authorize()` in `download_document`. Confirmed `backend/tests/test_sharing.py` caught the breach and failed (`assert 200 == 404`). Reverted mutation and confirmed all tests pass (218 passed, 4 skipped across 222 tests).
+- Updated `THREATS.md` with PostgreSQL `bytea` serverless storage threat defenses.
+
+**What was wrong:** TODO
+
+**What I did instead:** TODO

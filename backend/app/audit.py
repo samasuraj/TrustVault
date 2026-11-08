@@ -69,15 +69,27 @@ def log_event(
     prev = last.hash if last else None
 
     now = datetime.now(timezone.utc)
+    evt_doc_id = doc_id
+    evt_detail = dict(detail) if detail else {}
+    if evt_doc_id is not None and hasattr(db, "query"):
+        from app.models import Document
+        try:
+            doc_exists = db.query(Document.id).filter(Document.id == evt_doc_id).first()
+            if not doc_exists:
+                evt_detail.setdefault("requested_doc_id", str(evt_doc_id))
+                evt_doc_id = None
+        except Exception:
+            pass
+
     payload = {
         "ts": format_ts(now),
         "actor_id": str(actor_id) if actor_id else None,
         "action": action,
-        "doc_id": str(doc_id) if doc_id else None,
+        "doc_id": str(evt_doc_id) if evt_doc_id else None,
         "target_user_id": str(target_user_id) if target_user_id else None,
         "outcome": outcome,
         "ip": ip,
-        "detail": detail,
+        "detail": evt_detail,
     }
     h = compute_hash(cfg.audit_hmac_key, prev, payload)
 
@@ -85,11 +97,11 @@ def log_event(
         ts=now,
         actor_id=actor_id,
         action=action,
-        doc_id=doc_id,
+        doc_id=evt_doc_id,
         target_user_id=target_user_id,
         outcome=outcome,
         ip=ip,
-        detail=detail,
+        detail=evt_detail,
         prev_hash=prev,
         hash=h,
     )

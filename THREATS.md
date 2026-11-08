@@ -136,10 +136,10 @@ This document details the hostile penetration testing evaluation, security mitig
 - **What Was Done**: Revoking a grant automatically updates all pending, unredeemed download tokens for `(doc_id, user_id)` to mark them invalid. Furthermore, `download_document` dynamically invokes `authorize(db, user, doc_id, "download")` at redemption time against the live database, ensuring any grant revoked during redemption immediately returns HTTP 404.
 - **Covering Test**: `test_race_condition_revoke_and_download`
 
-### 26. Storage Volume Directory Exposure
-- **Attack**: An adversary attempts to browse file storage directly through the web server or locate readable file names on the host filesystem.
-- **What Was Done**: Files are stored outside any web server document root in a dedicated volume (`/var/vault/storage`). Files are never served statically. Every file is stored under a random UUID name with no readable extension, encrypted at rest with AES-256-GCM and a unique 12-byte initialization vector. Plaintext content is only accessible through authenticated, streaming endpoints.
-- **Covering Test**: `test_storage_volume_not_exposed`
+### 26. Storage Volume Directory & Serverless Storage Exposure
+- **Attack**: An adversary attempts to browse file storage directly through the web server, locate readable file names on the host filesystem, or exploit ephemeral serverless scratch disks.
+- **What Was Done**: In traditional volume environments, files are stored outside any web server document root in a dedicated volume (`/var/vault/storage`) under random UUID names with no readable extension, encrypted at rest with AES-256-GCM and a unique 12-byte initialization vector. In serverless environments (e.g. Vercel + Neon PostgreSQL), ciphertext blobs are persisted directly in PostgreSQL `bytea` on `doc_versions.file_data`, ensuring zero static file exposure and persistent encrypted storage without disk leakage. Plaintext content is only accessible through authenticated, streaming endpoints.
+- **Covering Test**: `test_storage_volume_not_exposed`, `test_postgres_bytea_storage_and_retrieval`
 
 ### 27. Log Injection via CRLF in Filenames and Metadata
 - **Attack**: An attacker submits document names or filenames containing Carriage Return and Line Feed sequences (`\r\n`) to inject forged audit events or split server log streams.
