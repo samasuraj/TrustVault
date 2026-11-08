@@ -1,6 +1,21 @@
 # TrustVault
 
-**TrustVault** is a secure document sharing platform with a cryptographically provable, append-only audit trail. It enforces zero-knowledge anti-enumeration, strict least-privilege role-based access control, client-isolated searches, AES-256-GCM encrypted storage at rest, and an HMAC-SHA256 hash-chained audit ledger.
+**TrustVault** is a secure document sharing platform with a cryptographically provable, append-only audit trail. It enforces zero-knowledge anti-enumeration, strict least-privilege role-based access control, client-isolated searches, AES-256-GCM encrypted storage at rest (PostgreSQL `bytea`), and an HMAC-SHA256 hash-chained audit ledger.
+
+---
+
+## Live Production Deployment
+
+- **Web Application**: [https://trustvault-frontend-seven.vercel.app](https://trustvault-frontend-seven.vercel.app)
+- **API Health**: [https://trustvault-frontend-seven.vercel.app/api/health](https://trustvault-frontend-seven.vercel.app/api/health)
+
+### Live Demo Accounts
+
+| Role | Email | Password | Primary Capabilities |
+|---|---|---|---|
+| **Admin** | `admin@trustvault.io` | `AdminVaultPass2026!` | Audit trail review, HMAC chain verification, user registration & session revocation. *(Zero file content access without grant)* |
+| **Owner** | `alice.owner@trustvault.io` | `AliceVaultPass2026!` | Upload documents, manage versions, issue/revoke access grants, AI sharing assistant. |
+| **Viewer** | `charlie.viewer@trustvault.io` | `CharlieVaultPass2026!` | Read metadata and download decrypted file contents for granted documents. |
 
 ---
 
